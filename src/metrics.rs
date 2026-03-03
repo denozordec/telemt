@@ -620,6 +620,64 @@ async fn render_metrics(stats: &Stats, config: &ProxyConfig, ip_tracker: &UserIp
         }
     );
 
+    let _ = writeln!(
+        out,
+        "# HELP telemt_me_floor_mode Runtime ME writer floor policy mode"
+    );
+    let _ = writeln!(out, "# TYPE telemt_me_floor_mode gauge");
+    let floor_mode = config.general.me_floor_mode;
+    let _ = writeln!(
+        out,
+        "telemt_me_floor_mode{{mode=\"static\"}} {}",
+        if matches!(floor_mode, crate::config::MeFloorMode::Static) {
+            1
+        } else {
+            0
+        }
+    );
+    let _ = writeln!(
+        out,
+        "telemt_me_floor_mode{{mode=\"adaptive\"}} {}",
+        if matches!(floor_mode, crate::config::MeFloorMode::Adaptive) {
+            1
+        } else {
+            0
+        }
+    );
+
+    let _ = writeln!(
+        out,
+        "# HELP telemt_me_floor_mode_switch_all_total Runtime ME floor mode switches"
+    );
+    let _ = writeln!(out, "# TYPE telemt_me_floor_mode_switch_all_total counter");
+    let _ = writeln!(
+        out,
+        "telemt_me_floor_mode_switch_all_total {}",
+        if me_allows_normal {
+            stats.get_me_floor_mode_switch_total()
+        } else {
+            0
+        }
+    );
+    let _ = writeln!(
+        out,
+        "telemt_me_floor_mode_switch_total{{from=\"static\",to=\"adaptive\"}} {}",
+        if me_allows_normal {
+            stats.get_me_floor_mode_switch_static_to_adaptive_total()
+        } else {
+            0
+        }
+    );
+    let _ = writeln!(
+        out,
+        "telemt_me_floor_mode_switch_total{{from=\"adaptive\",to=\"static\"}} {}",
+        if me_allows_normal {
+            stats.get_me_floor_mode_switch_adaptive_to_static_total()
+        } else {
+            0
+        }
+    );
+
     let _ = writeln!(out, "# HELP telemt_secure_padding_invalid_total Invalid secure frame lengths");
     let _ = writeln!(out, "# TYPE telemt_secure_padding_invalid_total counter");
     let _ = writeln!(
