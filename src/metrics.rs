@@ -202,6 +202,195 @@ async fn render_metrics(stats: &Stats, config: &ProxyConfig, ip_tracker: &UserIp
         }
     );
 
+    let _ = writeln!(
+        out,
+        "# HELP telemt_upstream_connect_attempt_total Upstream connect attempts across all requests"
+    );
+    let _ = writeln!(out, "# TYPE telemt_upstream_connect_attempt_total counter");
+    let _ = writeln!(
+        out,
+        "telemt_upstream_connect_attempt_total {}",
+        if core_enabled {
+            stats.get_upstream_connect_attempt_total()
+        } else {
+            0
+        }
+    );
+
+    let _ = writeln!(
+        out,
+        "# HELP telemt_upstream_connect_success_total Successful upstream connect request cycles"
+    );
+    let _ = writeln!(out, "# TYPE telemt_upstream_connect_success_total counter");
+    let _ = writeln!(
+        out,
+        "telemt_upstream_connect_success_total {}",
+        if core_enabled {
+            stats.get_upstream_connect_success_total()
+        } else {
+            0
+        }
+    );
+
+    let _ = writeln!(
+        out,
+        "# HELP telemt_upstream_connect_fail_total Failed upstream connect request cycles"
+    );
+    let _ = writeln!(out, "# TYPE telemt_upstream_connect_fail_total counter");
+    let _ = writeln!(
+        out,
+        "telemt_upstream_connect_fail_total {}",
+        if core_enabled {
+            stats.get_upstream_connect_fail_total()
+        } else {
+            0
+        }
+    );
+
+    let _ = writeln!(
+        out,
+        "# HELP telemt_upstream_connect_failfast_hard_error_total Hard errors that triggered upstream connect failfast"
+    );
+    let _ = writeln!(
+        out,
+        "# TYPE telemt_upstream_connect_failfast_hard_error_total counter"
+    );
+    let _ = writeln!(
+        out,
+        "telemt_upstream_connect_failfast_hard_error_total {}",
+        if core_enabled {
+            stats.get_upstream_connect_failfast_hard_error_total()
+        } else {
+            0
+        }
+    );
+
+    let _ = writeln!(
+        out,
+        "# HELP telemt_upstream_connect_attempts_per_request Histogram-like buckets for attempts per upstream connect request cycle"
+    );
+    let _ = writeln!(out, "# TYPE telemt_upstream_connect_attempts_per_request counter");
+    let _ = writeln!(
+        out,
+        "telemt_upstream_connect_attempts_per_request{{bucket=\"1\"}} {}",
+        if core_enabled {
+            stats.get_upstream_connect_attempts_bucket_1()
+        } else {
+            0
+        }
+    );
+    let _ = writeln!(
+        out,
+        "telemt_upstream_connect_attempts_per_request{{bucket=\"2\"}} {}",
+        if core_enabled {
+            stats.get_upstream_connect_attempts_bucket_2()
+        } else {
+            0
+        }
+    );
+    let _ = writeln!(
+        out,
+        "telemt_upstream_connect_attempts_per_request{{bucket=\"3_4\"}} {}",
+        if core_enabled {
+            stats.get_upstream_connect_attempts_bucket_3_4()
+        } else {
+            0
+        }
+    );
+    let _ = writeln!(
+        out,
+        "telemt_upstream_connect_attempts_per_request{{bucket=\"gt_4\"}} {}",
+        if core_enabled {
+            stats.get_upstream_connect_attempts_bucket_gt_4()
+        } else {
+            0
+        }
+    );
+
+    let _ = writeln!(
+        out,
+        "# HELP telemt_upstream_connect_duration_success_total Histogram-like buckets of successful upstream connect cycle duration"
+    );
+    let _ = writeln!(out, "# TYPE telemt_upstream_connect_duration_success_total counter");
+    let _ = writeln!(
+        out,
+        "telemt_upstream_connect_duration_success_total{{bucket=\"le_100ms\"}} {}",
+        if core_enabled {
+            stats.get_upstream_connect_duration_success_bucket_le_100ms()
+        } else {
+            0
+        }
+    );
+    let _ = writeln!(
+        out,
+        "telemt_upstream_connect_duration_success_total{{bucket=\"101_500ms\"}} {}",
+        if core_enabled {
+            stats.get_upstream_connect_duration_success_bucket_101_500ms()
+        } else {
+            0
+        }
+    );
+    let _ = writeln!(
+        out,
+        "telemt_upstream_connect_duration_success_total{{bucket=\"501_1000ms\"}} {}",
+        if core_enabled {
+            stats.get_upstream_connect_duration_success_bucket_501_1000ms()
+        } else {
+            0
+        }
+    );
+    let _ = writeln!(
+        out,
+        "telemt_upstream_connect_duration_success_total{{bucket=\"gt_1000ms\"}} {}",
+        if core_enabled {
+            stats.get_upstream_connect_duration_success_bucket_gt_1000ms()
+        } else {
+            0
+        }
+    );
+
+    let _ = writeln!(
+        out,
+        "# HELP telemt_upstream_connect_duration_fail_total Histogram-like buckets of failed upstream connect cycle duration"
+    );
+    let _ = writeln!(out, "# TYPE telemt_upstream_connect_duration_fail_total counter");
+    let _ = writeln!(
+        out,
+        "telemt_upstream_connect_duration_fail_total{{bucket=\"le_100ms\"}} {}",
+        if core_enabled {
+            stats.get_upstream_connect_duration_fail_bucket_le_100ms()
+        } else {
+            0
+        }
+    );
+    let _ = writeln!(
+        out,
+        "telemt_upstream_connect_duration_fail_total{{bucket=\"101_500ms\"}} {}",
+        if core_enabled {
+            stats.get_upstream_connect_duration_fail_bucket_101_500ms()
+        } else {
+            0
+        }
+    );
+    let _ = writeln!(
+        out,
+        "telemt_upstream_connect_duration_fail_total{{bucket=\"501_1000ms\"}} {}",
+        if core_enabled {
+            stats.get_upstream_connect_duration_fail_bucket_501_1000ms()
+        } else {
+            0
+        }
+    );
+    let _ = writeln!(
+        out,
+        "telemt_upstream_connect_duration_fail_total{{bucket=\"gt_1000ms\"}} {}",
+        if core_enabled {
+            stats.get_upstream_connect_duration_fail_bucket_gt_1000ms()
+        } else {
+            0
+        }
+    );
+
     let _ = writeln!(out, "# HELP telemt_me_keepalive_sent_total ME keepalive frames sent");
     let _ = writeln!(out, "# TYPE telemt_me_keepalive_sent_total counter");
     let _ = writeln!(
@@ -1028,6 +1217,14 @@ mod tests {
         stats.increment_connects_all();
         stats.increment_connects_bad();
         stats.increment_handshake_timeouts();
+        stats.increment_upstream_connect_attempt_total();
+        stats.increment_upstream_connect_attempt_total();
+        stats.increment_upstream_connect_success_total();
+        stats.increment_upstream_connect_fail_total();
+        stats.increment_upstream_connect_failfast_hard_error_total();
+        stats.observe_upstream_connect_attempts_per_request(2);
+        stats.observe_upstream_connect_duration_ms(220, true);
+        stats.observe_upstream_connect_duration_ms(1500, false);
         stats.increment_user_connects("alice");
         stats.increment_user_curr_connects("alice");
         stats.add_user_octets_from("alice", 1024);
@@ -1045,6 +1242,21 @@ mod tests {
         assert!(output.contains("telemt_connections_total 2"));
         assert!(output.contains("telemt_connections_bad_total 1"));
         assert!(output.contains("telemt_handshake_timeouts_total 1"));
+        assert!(output.contains("telemt_upstream_connect_attempt_total 2"));
+        assert!(output.contains("telemt_upstream_connect_success_total 1"));
+        assert!(output.contains("telemt_upstream_connect_fail_total 1"));
+        assert!(output.contains("telemt_upstream_connect_failfast_hard_error_total 1"));
+        assert!(
+            output.contains("telemt_upstream_connect_attempts_per_request{bucket=\"2\"} 1")
+        );
+        assert!(
+            output.contains(
+                "telemt_upstream_connect_duration_success_total{bucket=\"101_500ms\"} 1"
+            )
+        );
+        assert!(
+            output.contains("telemt_upstream_connect_duration_fail_total{bucket=\"gt_1000ms\"} 1")
+        );
         assert!(output.contains("telemt_user_connections_total{user=\"alice\"} 1"));
         assert!(output.contains("telemt_user_connections_current{user=\"alice\"} 1"));
         assert!(output.contains("telemt_user_octets_from_client{user=\"alice\"} 1024"));
@@ -1078,6 +1290,7 @@ mod tests {
         assert!(output.contains("# TYPE telemt_connections_total counter"));
         assert!(output.contains("# TYPE telemt_connections_bad_total counter"));
         assert!(output.contains("# TYPE telemt_handshake_timeouts_total counter"));
+        assert!(output.contains("# TYPE telemt_upstream_connect_attempt_total counter"));
         assert!(output.contains("# TYPE telemt_me_writer_removed_total counter"));
         assert!(output.contains(
             "# TYPE telemt_me_writer_removed_unexpected_minus_restored_total gauge"
