@@ -387,9 +387,11 @@ impl MePool {
             socks_bound_addr.map(|value| value.ip()),
             client_port_source,
         );
-        let mut kdf_fingerprint_guard = self.kdf_material_fingerprint.lock().await;
-        if let Some((prev_fingerprint, prev_client_port)) =
+        let previous_kdf_fingerprint = {
+            let kdf_fingerprint_guard = self.kdf_material_fingerprint.read().await;
             kdf_fingerprint_guard.get(&peer_addr_nat).copied()
+        };
+        if let Some((prev_fingerprint, prev_client_port)) = previous_kdf_fingerprint
         {
             if prev_fingerprint != kdf_fingerprint {
                 self.stats.increment_me_kdf_drift_total();
@@ -416,6 +418,9 @@ impl MePool {
                 );
             }
         }
+        // Keep fingerprint updates eventually consistent for diagnostics while avoiding
+        // serializing all concurrent handshakes on a single async mutex.
+        let mut kdf_fingerprint_guard = self.kdf_material_fingerprint.write().await;
         kdf_fingerprint_guard.insert(peer_addr_nat, (kdf_fingerprint, client_port_for_kdf));
         drop(kdf_fingerprint_guard);
 

@@ -1339,7 +1339,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let (admission_tx, admission_rx) = watch::channel(true);
     if config.general.use_middle_proxy {
         if let Some(pool) = me_pool.as_ref() {
-            let initial_open = pool.admission_ready_full_floor().await;
+            let initial_open = pool.admission_ready_conditional_cast().await;
             admission_tx.send_replace(initial_open);
             if initial_open {
                 info!("Conditional-admission gate: open (ME pool ready)");
@@ -1354,7 +1354,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                 let mut open_streak = if initial_open { 1u32 } else { 0u32 };
                 let mut close_streak = if initial_open { 0u32 } else { 1u32 };
                 loop {
-                    let ready = pool_for_gate.admission_ready_full_floor().await;
+                    let ready = pool_for_gate.admission_ready_conditional_cast().await;
                     if ready {
                         open_streak = open_streak.saturating_add(1);
                         close_streak = 0;
@@ -1374,7 +1374,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                             admission_tx_gate.send_replace(false);
                             warn!(
                                 close_streak,
-                                "Conditional-admission gate closed (ME pool below required floor)"
+                                "Conditional-admission gate closed (ME pool has uncovered DC groups)"
                             );
                         }
                     }

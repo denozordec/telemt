@@ -548,6 +548,12 @@ impl ProxyConfig {
             config.general.middle_proxy_nat_probe = true;
             warn!("Auto-enabled middle_proxy_nat_probe for middle proxy mode");
         }
+        if config.general.use_middle_proxy && !config.general.me_secret_atomic_snapshot {
+            config.general.me_secret_atomic_snapshot = true;
+            warn!(
+                "Auto-enabled me_secret_atomic_snapshot for middle proxy mode to keep KDF key_selector/secret coherent"
+            );
+        }
 
         validate_network_cfg(&mut config.network)?;
         crate::network::dns_overrides::validate_entries(&config.network.dns_overrides)?;
