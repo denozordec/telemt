@@ -208,6 +208,7 @@ impl MePool {
         let keepalive_jitter_signal = self.me_keepalive_jitter;
         let cancel_reader_token = cancel.clone();
         let cancel_ping_token = cancel_ping.clone();
+        let reader_route_data_wait_ms = self.me_reader_route_data_wait_ms.clone();
 
         tokio::spawn(async move {
             let res = reader_loop(
@@ -225,6 +226,7 @@ impl MePool {
                 writer_id,
                 degraded.clone(),
                 rtt_ema_ms_x10.clone(),
+                reader_route_data_wait_ms,
                 cancel_reader_token.clone(),
             )
             .await;

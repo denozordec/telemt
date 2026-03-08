@@ -96,6 +96,13 @@ pub struct HotFields {
     pub me_route_backpressure_base_timeout_ms: u64,
     pub me_route_backpressure_high_timeout_ms: u64,
     pub me_route_backpressure_high_watermark_pct: u8,
+    pub me_reader_route_data_wait_ms: u64,
+    pub me_d2c_flush_batch_max_frames: usize,
+    pub me_d2c_flush_batch_max_bytes: usize,
+    pub me_d2c_flush_batch_max_delay_us: u64,
+    pub me_d2c_ack_flush_immediate: bool,
+    pub direct_relay_copy_buf_c2s_bytes: usize,
+    pub direct_relay_copy_buf_s2c_bytes: usize,
     pub me_health_interval_ms_unhealthy: u64,
     pub me_health_interval_ms_healthy: u64,
     pub me_admission_poll_ms: u64,
@@ -203,6 +210,13 @@ impl HotFields {
             me_route_backpressure_base_timeout_ms: cfg.general.me_route_backpressure_base_timeout_ms,
             me_route_backpressure_high_timeout_ms: cfg.general.me_route_backpressure_high_timeout_ms,
             me_route_backpressure_high_watermark_pct: cfg.general.me_route_backpressure_high_watermark_pct,
+            me_reader_route_data_wait_ms: cfg.general.me_reader_route_data_wait_ms,
+            me_d2c_flush_batch_max_frames: cfg.general.me_d2c_flush_batch_max_frames,
+            me_d2c_flush_batch_max_bytes: cfg.general.me_d2c_flush_batch_max_bytes,
+            me_d2c_flush_batch_max_delay_us: cfg.general.me_d2c_flush_batch_max_delay_us,
+            me_d2c_ack_flush_immediate: cfg.general.me_d2c_ack_flush_immediate,
+            direct_relay_copy_buf_c2s_bytes: cfg.general.direct_relay_copy_buf_c2s_bytes,
+            direct_relay_copy_buf_s2c_bytes: cfg.general.direct_relay_copy_buf_s2c_bytes,
             me_health_interval_ms_unhealthy: cfg.general.me_health_interval_ms_unhealthy,
             me_health_interval_ms_healthy: cfg.general.me_health_interval_ms_healthy,
             me_admission_poll_ms: cfg.general.me_admission_poll_ms,
@@ -352,6 +366,13 @@ fn overlay_hot_fields(old: &ProxyConfig, new: &ProxyConfig) -> ProxyConfig {
         new.general.me_route_backpressure_high_timeout_ms;
     cfg.general.me_route_backpressure_high_watermark_pct =
         new.general.me_route_backpressure_high_watermark_pct;
+    cfg.general.me_reader_route_data_wait_ms = new.general.me_reader_route_data_wait_ms;
+    cfg.general.me_d2c_flush_batch_max_frames = new.general.me_d2c_flush_batch_max_frames;
+    cfg.general.me_d2c_flush_batch_max_bytes = new.general.me_d2c_flush_batch_max_bytes;
+    cfg.general.me_d2c_flush_batch_max_delay_us = new.general.me_d2c_flush_batch_max_delay_us;
+    cfg.general.me_d2c_ack_flush_immediate = new.general.me_d2c_ack_flush_immediate;
+    cfg.general.direct_relay_copy_buf_c2s_bytes = new.general.direct_relay_copy_buf_c2s_bytes;
+    cfg.general.direct_relay_copy_buf_s2c_bytes = new.general.direct_relay_copy_buf_s2c_bytes;
     cfg.general.me_health_interval_ms_unhealthy = new.general.me_health_interval_ms_unhealthy;
     cfg.general.me_health_interval_ms_healthy = new.general.me_health_interval_ms_healthy;
     cfg.general.me_admission_poll_ms = new.general.me_admission_poll_ms;
@@ -821,6 +842,7 @@ fn log_changes(
             != new_hot.me_route_backpressure_high_timeout_ms
         || old_hot.me_route_backpressure_high_watermark_pct
             != new_hot.me_route_backpressure_high_watermark_pct
+        || old_hot.me_reader_route_data_wait_ms != new_hot.me_reader_route_data_wait_ms
         || old_hot.me_health_interval_ms_unhealthy
             != new_hot.me_health_interval_ms_unhealthy
         || old_hot.me_health_interval_ms_healthy != new_hot.me_health_interval_ms_healthy
@@ -828,14 +850,33 @@ fn log_changes(
         || old_hot.me_warn_rate_limit_ms != new_hot.me_warn_rate_limit_ms
     {
         info!(
-            "config reload: me_route_backpressure: base={}ms high={}ms watermark={}%; me_health_interval: unhealthy={}ms healthy={}ms; me_admission_poll={}ms; me_warn_rate_limit={}ms",
+            "config reload: me_route_backpressure: base={}ms high={}ms watermark={}%; me_reader_route_data_wait_ms={}; me_health_interval: unhealthy={}ms healthy={}ms; me_admission_poll={}ms; me_warn_rate_limit={}ms",
             new_hot.me_route_backpressure_base_timeout_ms,
             new_hot.me_route_backpressure_high_timeout_ms,
             new_hot.me_route_backpressure_high_watermark_pct,
+            new_hot.me_reader_route_data_wait_ms,
             new_hot.me_health_interval_ms_unhealthy,
             new_hot.me_health_interval_ms_healthy,
             new_hot.me_admission_poll_ms,
             new_hot.me_warn_rate_limit_ms,
+        );
+    }
+
+    if old_hot.me_d2c_flush_batch_max_frames != new_hot.me_d2c_flush_batch_max_frames
+        || old_hot.me_d2c_flush_batch_max_bytes != new_hot.me_d2c_flush_batch_max_bytes
+        || old_hot.me_d2c_flush_batch_max_delay_us != new_hot.me_d2c_flush_batch_max_delay_us
+        || old_hot.me_d2c_ack_flush_immediate != new_hot.me_d2c_ack_flush_immediate
+        || old_hot.direct_relay_copy_buf_c2s_bytes != new_hot.direct_relay_copy_buf_c2s_bytes
+        || old_hot.direct_relay_copy_buf_s2c_bytes != new_hot.direct_relay_copy_buf_s2c_bytes
+    {
+        info!(
+            "config reload: relay_tuning: me_d2c_frames={} me_d2c_bytes={} me_d2c_delay_us={} me_ack_flush_immediate={} direct_buf_c2s={} direct_buf_s2c={}",
+            new_hot.me_d2c_flush_batch_max_frames,
+            new_hot.me_d2c_flush_batch_max_bytes,
+            new_hot.me_d2c_flush_batch_max_delay_us,
+            new_hot.me_d2c_ack_flush_immediate,
+            new_hot.direct_relay_copy_buf_c2s_bytes,
+            new_hot.direct_relay_copy_buf_s2c_bytes,
         );
     }
 

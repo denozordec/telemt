@@ -303,6 +303,42 @@ impl ProxyConfig {
             ));
         }
 
+        if config.general.me_reader_route_data_wait_ms > 20 {
+            return Err(ProxyError::Config(
+                "general.me_reader_route_data_wait_ms must be within [0, 20]".to_string(),
+            ));
+        }
+
+        if !(1..=512).contains(&config.general.me_d2c_flush_batch_max_frames) {
+            return Err(ProxyError::Config(
+                "general.me_d2c_flush_batch_max_frames must be within [1, 512]".to_string(),
+            ));
+        }
+
+        if !(4096..=2 * 1024 * 1024).contains(&config.general.me_d2c_flush_batch_max_bytes) {
+            return Err(ProxyError::Config(
+                "general.me_d2c_flush_batch_max_bytes must be within [4096, 2097152]".to_string(),
+            ));
+        }
+
+        if config.general.me_d2c_flush_batch_max_delay_us > 5000 {
+            return Err(ProxyError::Config(
+                "general.me_d2c_flush_batch_max_delay_us must be within [0, 5000]".to_string(),
+            ));
+        }
+
+        if !(4096..=1024 * 1024).contains(&config.general.direct_relay_copy_buf_c2s_bytes) {
+            return Err(ProxyError::Config(
+                "general.direct_relay_copy_buf_c2s_bytes must be within [4096, 1048576]".to_string(),
+            ));
+        }
+
+        if !(8192..=2 * 1024 * 1024).contains(&config.general.direct_relay_copy_buf_s2c_bytes) {
+            return Err(ProxyError::Config(
+                "general.direct_relay_copy_buf_s2c_bytes must be within [8192, 2097152]".to_string(),
+            ));
+        }
+
         if config.general.me_health_interval_ms_unhealthy == 0 {
             return Err(ProxyError::Config(
                 "general.me_health_interval_ms_unhealthy must be > 0".to_string(),

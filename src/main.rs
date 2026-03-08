@@ -1055,6 +1055,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                         config.general.me_route_backpressure_base_timeout_ms,
                         config.general.me_route_backpressure_high_timeout_ms,
                         config.general.me_route_backpressure_high_watermark_pct,
+                        config.general.me_reader_route_data_wait_ms,
                         config.general.me_health_interval_ms_unhealthy,
                         config.general.me_health_interval_ms_healthy,
                         config.general.me_warn_rate_limit_ms,
@@ -1559,6 +1560,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                     cfg.general.me_route_backpressure_base_timeout_ms,
                     cfg.general.me_route_backpressure_high_timeout_ms,
                     cfg.general.me_route_backpressure_high_watermark_pct,
+                    cfg.general.me_reader_route_data_wait_ms,
                 );
             }
         }

@@ -24,6 +24,13 @@ const DEFAULT_ME_ADAPTIVE_FLOOR_MAX_WARM_WRITERS_GLOBAL: u32 = 256;
 const DEFAULT_ME_WRITER_CMD_CHANNEL_CAPACITY: usize = 4096;
 const DEFAULT_ME_ROUTE_CHANNEL_CAPACITY: usize = 768;
 const DEFAULT_ME_C2ME_CHANNEL_CAPACITY: usize = 1024;
+const DEFAULT_ME_READER_ROUTE_DATA_WAIT_MS: u64 = 2;
+const DEFAULT_ME_D2C_FLUSH_BATCH_MAX_FRAMES: usize = 32;
+const DEFAULT_ME_D2C_FLUSH_BATCH_MAX_BYTES: usize = 128 * 1024;
+const DEFAULT_ME_D2C_FLUSH_BATCH_MAX_DELAY_US: u64 = 1500;
+const DEFAULT_ME_D2C_ACK_FLUSH_IMMEDIATE: bool = false;
+const DEFAULT_DIRECT_RELAY_COPY_BUF_C2S_BYTES: usize = 64 * 1024;
+const DEFAULT_DIRECT_RELAY_COPY_BUF_S2C_BYTES: usize = 256 * 1024;
 const DEFAULT_ME_WRITER_PICK_SAMPLE_SIZE: u8 = 3;
 const DEFAULT_ME_HEALTH_INTERVAL_MS_UNHEALTHY: u64 = 1000;
 const DEFAULT_ME_HEALTH_INTERVAL_MS_HEALTHY: u64 = 3000;
@@ -314,6 +321,34 @@ pub(crate) fn default_me_route_channel_capacity() -> usize {
 
 pub(crate) fn default_me_c2me_channel_capacity() -> usize {
     DEFAULT_ME_C2ME_CHANNEL_CAPACITY
+}
+
+pub(crate) fn default_me_reader_route_data_wait_ms() -> u64 {
+    DEFAULT_ME_READER_ROUTE_DATA_WAIT_MS
+}
+
+pub(crate) fn default_me_d2c_flush_batch_max_frames() -> usize {
+    DEFAULT_ME_D2C_FLUSH_BATCH_MAX_FRAMES
+}
+
+pub(crate) fn default_me_d2c_flush_batch_max_bytes() -> usize {
+    DEFAULT_ME_D2C_FLUSH_BATCH_MAX_BYTES
+}
+
+pub(crate) fn default_me_d2c_flush_batch_max_delay_us() -> u64 {
+    DEFAULT_ME_D2C_FLUSH_BATCH_MAX_DELAY_US
+}
+
+pub(crate) fn default_me_d2c_ack_flush_immediate() -> bool {
+    DEFAULT_ME_D2C_ACK_FLUSH_IMMEDIATE
+}
+
+pub(crate) fn default_direct_relay_copy_buf_c2s_bytes() -> usize {
+    DEFAULT_DIRECT_RELAY_COPY_BUF_C2S_BYTES
+}
+
+pub(crate) fn default_direct_relay_copy_buf_s2c_bytes() -> usize {
+    DEFAULT_DIRECT_RELAY_COPY_BUF_S2C_BYTES
 }
 
 pub(crate) fn default_me_writer_pick_sample_size() -> u8 {

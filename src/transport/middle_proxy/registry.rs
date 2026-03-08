@@ -231,6 +231,57 @@ impl ConnRegistry {
         }
     }
 
+    pub async fn route_with_timeout(
+        &self,
+        id: u64,
+        resp: MeResponse,
+        timeout_ms: u64,
+    ) -> RouteResult {
+        if timeout_ms == 0 {
+            return self.route_nowait(id, resp).await;
+        }
+
+        let tx = {
+            let inner = self.inner.read().await;
+            inner.map.get(&id).cloned()
+        };
+
+        let Some(tx) = tx else {
+            return RouteResult::NoConn;
+        };
+
+        match tx.try_send(resp) {
+            Ok(()) => RouteResult::Routed,
+            Err(TrySendError::Closed(_)) => RouteResult::ChannelClosed,
+            Err(TrySendError::Full(resp)) => {
+                let high_watermark_pct = self
+                    .route_backpressure_high_watermark_pct
+                    .load(Ordering::Relaxed)
+                    .clamp(1, 100);
+                let used = self.route_channel_capacity.saturating_sub(tx.capacity());
+                let used_pct = if self.route_channel_capacity == 0 {
+                    100
+                } else {
+                    (used.saturating_mul(100) / self.route_channel_capacity) as u8
+                };
+                let high_profile = used_pct >= high_watermark_pct;
+                let timeout_dur = Duration::from_millis(timeout_ms.max(1));
+
+                match tokio::time::timeout(timeout_dur, tx.send(resp)).await {
+                    Ok(Ok(())) => RouteResult::Routed,
+                    Ok(Err(_)) => RouteResult::ChannelClosed,
+                    Err(_) => {
+                        if high_profile {
+                            RouteResult::QueueFullHigh
+                        } else {
+                            RouteResult::QueueFullBase
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     pub async fn bind_writer(
         &self,
         conn_id: u64,

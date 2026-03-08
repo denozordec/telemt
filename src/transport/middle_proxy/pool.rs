@@ -183,6 +183,7 @@ pub struct MePool {
     pub(super) me_writer_pick_mode: AtomicU8,
     pub(super) me_writer_pick_sample_size: AtomicU8,
     pub(super) me_socks_kdf_policy: AtomicU8,
+    pub(super) me_reader_route_data_wait_ms: Arc<AtomicU64>,
     pub(super) me_route_no_writer_mode: AtomicU8,
     pub(super) me_route_no_writer_wait: Duration,
     pub(super) me_route_inline_recovery_attempts: u32,
@@ -287,6 +288,7 @@ impl MePool {
         me_route_backpressure_base_timeout_ms: u64,
         me_route_backpressure_high_timeout_ms: u64,
         me_route_backpressure_high_watermark_pct: u8,
+        me_reader_route_data_wait_ms: u64,
         me_health_interval_ms_unhealthy: u64,
         me_health_interval_ms_healthy: u64,
         me_warn_rate_limit_ms: u64,
@@ -460,6 +462,7 @@ impl MePool {
             me_writer_pick_mode: AtomicU8::new(me_writer_pick_mode.as_u8()),
             me_writer_pick_sample_size: AtomicU8::new(me_writer_pick_sample_size.clamp(2, 4)),
             me_socks_kdf_policy: AtomicU8::new(me_socks_kdf_policy.as_u8()),
+            me_reader_route_data_wait_ms: Arc::new(AtomicU64::new(me_reader_route_data_wait_ms)),
             me_route_no_writer_mode: AtomicU8::new(me_route_no_writer_mode.as_u8()),
             me_route_no_writer_wait: Duration::from_millis(me_route_no_writer_wait_ms),
             me_route_inline_recovery_attempts,
@@ -650,9 +653,12 @@ impl MePool {
         route_backpressure_base_timeout_ms: u64,
         route_backpressure_high_timeout_ms: u64,
         route_backpressure_high_watermark_pct: u8,
+        reader_route_data_wait_ms: u64,
     ) {
         self.me_socks_kdf_policy
             .store(socks_kdf_policy.as_u8(), Ordering::Relaxed);
+        self.me_reader_route_data_wait_ms
+            .store(reader_route_data_wait_ms, Ordering::Relaxed);
         self.registry.update_route_backpressure_policy(
             route_backpressure_base_timeout_ms,
             route_backpressure_high_timeout_ms,

@@ -458,6 +458,36 @@ pub struct GeneralConfig {
     #[serde(default = "default_me_c2me_channel_capacity")]
     pub me_c2me_channel_capacity: usize,
 
+    /// Bounded wait in milliseconds for routing ME DATA to per-connection queue.
+    /// `0` keeps legacy no-wait behavior.
+    #[serde(default = "default_me_reader_route_data_wait_ms")]
+    pub me_reader_route_data_wait_ms: u64,
+
+    /// Maximum number of ME->Client responses coalesced before flush.
+    #[serde(default = "default_me_d2c_flush_batch_max_frames")]
+    pub me_d2c_flush_batch_max_frames: usize,
+
+    /// Maximum total payload bytes coalesced before flush.
+    #[serde(default = "default_me_d2c_flush_batch_max_bytes")]
+    pub me_d2c_flush_batch_max_bytes: usize,
+
+    /// Maximum wait in microseconds to coalesce additional ME->Client responses.
+    /// `0` disables timed coalescing.
+    #[serde(default = "default_me_d2c_flush_batch_max_delay_us")]
+    pub me_d2c_flush_batch_max_delay_us: u64,
+
+    /// Flush client writer immediately after quick-ack write.
+    #[serde(default = "default_me_d2c_ack_flush_immediate")]
+    pub me_d2c_ack_flush_immediate: bool,
+
+    /// Copy buffer size for client->DC direction in direct relay.
+    #[serde(default = "default_direct_relay_copy_buf_c2s_bytes")]
+    pub direct_relay_copy_buf_c2s_bytes: usize,
+
+    /// Copy buffer size for DC->client direction in direct relay.
+    #[serde(default = "default_direct_relay_copy_buf_s2c_bytes")]
+    pub direct_relay_copy_buf_s2c_bytes: usize,
+
     /// Max pending ciphertext buffer per client writer (bytes).
     /// Controls FakeTLS backpressure vs throughput.
     #[serde(default = "default_crypto_pending_buffer")]
@@ -861,6 +891,13 @@ impl Default for GeneralConfig {
             me_writer_cmd_channel_capacity: default_me_writer_cmd_channel_capacity(),
             me_route_channel_capacity: default_me_route_channel_capacity(),
             me_c2me_channel_capacity: default_me_c2me_channel_capacity(),
+            me_reader_route_data_wait_ms: default_me_reader_route_data_wait_ms(),
+            me_d2c_flush_batch_max_frames: default_me_d2c_flush_batch_max_frames(),
+            me_d2c_flush_batch_max_bytes: default_me_d2c_flush_batch_max_bytes(),
+            me_d2c_flush_batch_max_delay_us: default_me_d2c_flush_batch_max_delay_us(),
+            me_d2c_ack_flush_immediate: default_me_d2c_ack_flush_immediate(),
+            direct_relay_copy_buf_c2s_bytes: default_direct_relay_copy_buf_c2s_bytes(),
+            direct_relay_copy_buf_s2c_bytes: default_direct_relay_copy_buf_s2c_bytes(),
             me_warmup_stagger_enabled: default_true(),
             me_warmup_step_delay_ms: default_warmup_step_delay_ms(),
             me_warmup_step_jitter_ms: default_warmup_step_jitter_ms(),
