@@ -17,6 +17,7 @@ use crate::config::ProxyConfig;
 use crate::ip_tracker::UserIpTracker;
 use crate::stats::beobachten::BeobachtenStore;
 use crate::stats::Stats;
+use crate::transport::{ListenOptions, create_listener};
 
 pub async fn serve(
     port: u16,
@@ -26,16 +27,90 @@ pub async fn serve(
     config_rx: tokio::sync::watch::Receiver<Arc<ProxyConfig>>,
     whitelist: Vec<IpNetwork>,
 ) {
-    let addr = SocketAddr::from(([0, 0, 0, 0], port));
-    let listener = match TcpListener::bind(addr).await {
-        Ok(l) => l,
-        Err(e) => {
-            warn!(error = %e, "Failed to bind metrics on {}", addr);
-            return;
-        }
-    };
-    info!("Metrics endpoint: http://{}/metrics and /beobachten", addr);
+    let whitelist = Arc::new(whitelist);
+    let mut listener_v4 = None;
+    let mut listener_v6 = None;
 
+    let addr_v4 = SocketAddr::from(([0, 0, 0, 0], port));
+    match bind_metrics_listener(addr_v4, false) {
+        Ok(listener) => {
+            info!("Metrics endpoint: http://{}/metrics and /beobachten", addr_v4);
+            listener_v4 = Some(listener);
+        }
+        Err(e) => {
+            warn!(error = %e, "Failed to bind metrics on {}", addr_v4);
+        }
+    }
+
+    let addr_v6 = SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 0], port));
+    match bind_metrics_listener(addr_v6, true) {
+        Ok(listener) => {
+            info!("Metrics endpoint: http://[::]:{}/metrics and /beobachten", port);
+            listener_v6 = Some(listener);
+        }
+        Err(e) => {
+            warn!(error = %e, "Failed to bind metrics on {}", addr_v6);
+        }
+    }
+
+    match (listener_v4, listener_v6) {
+        (None, None) => {
+            warn!("Metrics listener is unavailable on both IPv4 and IPv6");
+        }
+        (Some(listener), None) | (None, Some(listener)) => {
+            serve_listener(
+                listener, stats, beobachten, ip_tracker, config_rx, whitelist,
+            )
+            .await;
+        }
+        (Some(listener4), Some(listener6)) => {
+            let stats_v6 = stats.clone();
+            let beobachten_v6 = beobachten.clone();
+            let ip_tracker_v6 = ip_tracker.clone();
+            let config_rx_v6 = config_rx.clone();
+            let whitelist_v6 = whitelist.clone();
+            tokio::spawn(async move {
+                serve_listener(
+                    listener6,
+                    stats_v6,
+                    beobachten_v6,
+                    ip_tracker_v6,
+                    config_rx_v6,
+                    whitelist_v6,
+                )
+                .await;
+            });
+            serve_listener(
+                listener4,
+                stats,
+                beobachten,
+                ip_tracker,
+                config_rx,
+                whitelist,
+            )
+            .await;
+        }
+    }
+}
+
+fn bind_metrics_listener(addr: SocketAddr, ipv6_only: bool) -> std::io::Result<TcpListener> {
+    let options = ListenOptions {
+        reuse_port: false,
+        ipv6_only,
+        ..Default::default()
+    };
+    let socket = create_listener(addr, &options)?;
+    TcpListener::from_std(socket.into())
+}
+
+async fn serve_listener(
+    listener: TcpListener,
+    stats: Arc<Stats>,
+    beobachten: Arc<BeobachtenStore>,
+    ip_tracker: Arc<UserIpTracker>,
+    config_rx: tokio::sync::watch::Receiver<Arc<ProxyConfig>>,
+    whitelist: Arc<Vec<IpNetwork>>,
+) {
     loop {
         let (stream, peer) = match listener.accept().await {
             Ok(v) => v,

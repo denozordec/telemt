@@ -8,6 +8,9 @@ use crate::config::ProxyConfig;
 use crate::proxy::route_mode::{RelayRouteMode, RouteRuntimeController};
 use crate::transport::middle_proxy::MePool;
 
+const STARTUP_FALLBACK_AFTER: Duration = Duration::from_secs(80);
+const RUNTIME_FALLBACK_AFTER: Duration = Duration::from_secs(6);
+
 pub(crate) async fn configure_admission_gate(
     config: &Arc<ProxyConfig>,
     me_pool: Option<Arc<MePool>>,
@@ -17,7 +20,6 @@ pub(crate) async fn configure_admission_gate(
 ) {
     if config.general.use_middle_proxy {
         if let Some(pool) = me_pool.as_ref() {
-            let fallback_after = Duration::from_secs(6);
             let initial_ready = pool.admission_ready_conditional_cast().await;
             admission_tx.send_replace(initial_ready);
             let _ = route_runtime.set_mode(RelayRouteMode::Middle);
@@ -36,6 +38,7 @@ pub(crate) async fn configure_admission_gate(
             tokio::spawn(async move {
                 let mut gate_open = initial_ready;
                 let mut route_mode = RelayRouteMode::Middle;
+                let mut ready_observed = initial_ready;
                 let mut not_ready_since = if initial_ready {
                     None
                 } else {
@@ -57,11 +60,17 @@ pub(crate) async fn configure_admission_gate(
                     let ready = pool_for_gate.admission_ready_conditional_cast().await;
                     let now = Instant::now();
                     let (next_gate_open, next_route_mode, next_fallback_active) = if ready {
+                        ready_observed = true;
                         not_ready_since = None;
                         (true, RelayRouteMode::Middle, false)
                     } else {
                         let not_ready_started_at = *not_ready_since.get_or_insert(now);
                         let not_ready_for = now.saturating_duration_since(not_ready_started_at);
+                        let fallback_after = if ready_observed {
+                            RUNTIME_FALLBACK_AFTER
+                        } else {
+                            STARTUP_FALLBACK_AFTER
+                        };
                         if fallback_enabled && not_ready_for > fallback_after {
                             (true, RelayRouteMode::Direct, true)
                         } else {
@@ -79,6 +88,11 @@ pub(crate) async fn configure_admission_gate(
                                     "Middle-End routing restored for new sessions"
                                 );
                             } else {
+                                let fallback_after = if ready_observed {
+                                    RUNTIME_FALLBACK_AFTER
+                                } else {
+                                    STARTUP_FALLBACK_AFTER
+                                };
                                 warn!(
                                     target_mode = route_mode.as_str(),
                                     cutover_generation = snapshot.generation,

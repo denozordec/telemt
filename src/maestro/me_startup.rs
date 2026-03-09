@@ -281,88 +281,178 @@ pub(crate) async fn initialize_me_pool(
                     .set_me_status(StartupMeStatus::Initializing, COMPONENT_ME_POOL_INIT_STAGE1)
                     .await;
 
-                let mut init_attempt: u32 = 0;
-                loop {
-                    init_attempt = init_attempt.saturating_add(1);
-                    startup_tracker.set_me_init_attempt(init_attempt).await;
-                    match pool.init(pool_size, &rng).await {
-                        Ok(()) => {
-                            startup_tracker.set_me_last_error(None).await;
-                            startup_tracker
-                                .complete_component(
-                                    COMPONENT_ME_POOL_INIT_STAGE1,
-                                    Some("ME pool initialized".to_string()),
-                                )
-                                .await;
-                            startup_tracker
-                                .set_me_status(StartupMeStatus::Ready, "ready")
-                                .await;
-                            info!(
-                                attempt = init_attempt,
-                                "Middle-End pool initialized successfully"
-                            );
+                if me2dc_fallback {
+                    let pool_bg = pool.clone();
+                    let rng_bg = rng.clone();
+                    let startup_tracker_bg = startup_tracker.clone();
+                    let retry_limit = if me_init_retry_attempts == 0 {
+                        String::from("unlimited")
+                    } else {
+                        me_init_retry_attempts.to_string()
+                    };
+                    std::thread::spawn(move || {
+                        let runtime = match tokio::runtime::Builder::new_current_thread()
+                            .enable_all()
+                            .build()
+                        {
+                            Ok(runtime) => runtime,
+                            Err(error) => {
+                                error!(error = %error, "Failed to build background runtime for ME initialization");
+                                return;
+                            }
+                        };
+                        runtime.block_on(async move {
+                            let mut init_attempt: u32 = 0;
+                            loop {
+                                init_attempt = init_attempt.saturating_add(1);
+                                startup_tracker_bg.set_me_init_attempt(init_attempt).await;
+                                match pool_bg.init(pool_size, &rng_bg).await {
+                                    Ok(()) => {
+                                        startup_tracker_bg.set_me_last_error(None).await;
+                                        startup_tracker_bg
+                                            .complete_component(
+                                                COMPONENT_ME_POOL_INIT_STAGE1,
+                                                Some("ME pool initialized".to_string()),
+                                            )
+                                            .await;
+                                        startup_tracker_bg
+                                            .set_me_status(StartupMeStatus::Ready, "ready")
+                                            .await;
+                                        info!(
+                                            attempt = init_attempt,
+                                            "Middle-End pool initialized successfully"
+                                        );
 
-                            // Phase 4: Start health monitor
-                            let pool_clone = pool.clone();
-                            let rng_clone = rng.clone();
-                            let min_conns = pool_size;
-                            tokio::spawn(async move {
-                                crate::transport::middle_proxy::me_health_monitor(
-                                    pool_clone, rng_clone, min_conns,
-                                )
-                                .await;
-                            });
-
-                            break Some(pool);
-                        }
-                        Err(e) => {
-                            startup_tracker.set_me_last_error(Some(e.to_string())).await;
-                            let retries_limited = me2dc_fallback && me_init_retry_attempts > 0;
-                            if retries_limited && init_attempt >= me_init_retry_attempts {
+                                        let pool_health = pool_bg.clone();
+                                        let rng_health = rng_bg.clone();
+                                        let min_conns = pool_size;
+                                        tokio::spawn(async move {
+                                            crate::transport::middle_proxy::me_health_monitor(
+                                                pool_health,
+                                                rng_health,
+                                                min_conns,
+                                            )
+                                            .await;
+                                        });
+                                        break;
+                                    }
+                                    Err(e) => {
+                                        startup_tracker_bg.set_me_last_error(Some(e.to_string())).await;
+                                        if init_attempt >= me_init_warn_after_attempts {
+                                            warn!(
+                                                error = %e,
+                                                attempt = init_attempt,
+                                                retry_limit = %retry_limit,
+                                                retry_in_secs = 2,
+                                                "ME pool is not ready yet; retrying background initialization"
+                                            );
+                                        } else {
+                                            info!(
+                                                error = %e,
+                                                attempt = init_attempt,
+                                                retry_limit = %retry_limit,
+                                                retry_in_secs = 2,
+                                                "ME pool startup warmup: retrying background initialization"
+                                            );
+                                        }
+                                        pool_bg.reset_stun_state();
+                                        tokio::time::sleep(Duration::from_secs(2)).await;
+                                    }
+                                }
+                            }
+                        });
+                    });
+                    startup_tracker
+                        .set_me_status(StartupMeStatus::Initializing, "background_init")
+                        .await;
+                    info!(
+                        startup_grace_secs = 80,
+                        "ME pool initialization continues in background; startup continues with conditional Direct fallback"
+                    );
+                    Some(pool)
+                } else {
+                    let mut init_attempt: u32 = 0;
+                    loop {
+                        init_attempt = init_attempt.saturating_add(1);
+                        startup_tracker.set_me_init_attempt(init_attempt).await;
+                        match pool.init(pool_size, &rng).await {
+                            Ok(()) => {
+                                startup_tracker.set_me_last_error(None).await;
                                 startup_tracker
-                                    .fail_component(
+                                    .complete_component(
                                         COMPONENT_ME_POOL_INIT_STAGE1,
-                                        Some("ME init retry budget exhausted".to_string()),
+                                        Some("ME pool initialized".to_string()),
                                     )
                                     .await;
                                 startup_tracker
-                                    .set_me_status(StartupMeStatus::Failed, "failed")
+                                    .set_me_status(StartupMeStatus::Ready, "ready")
                                     .await;
-                                error!(
-                                    error = %e,
-                                    attempt = init_attempt,
-                                    retry_limit = me_init_retry_attempts,
-                                    "ME pool init retries exhausted; falling back to direct mode"
-                                );
-                                break None;
-                            }
-
-                            let retry_limit = if !me2dc_fallback || me_init_retry_attempts == 0 {
-                                String::from("unlimited")
-                            } else {
-                                me_init_retry_attempts.to_string()
-                            };
-                            if init_attempt >= me_init_warn_after_attempts {
-                                warn!(
-                                    error = %e,
-                                    attempt = init_attempt,
-                                    retry_limit = retry_limit,
-                                    me2dc_fallback = me2dc_fallback,
-                                    retry_in_secs = 2,
-                                    "ME pool is not ready yet; retrying startup initialization"
-                                );
-                            } else {
                                 info!(
-                                    error = %e,
                                     attempt = init_attempt,
-                                    retry_limit = retry_limit,
-                                    me2dc_fallback = me2dc_fallback,
-                                    retry_in_secs = 2,
-                                    "ME pool startup warmup: retrying initialization"
+                                    "Middle-End pool initialized successfully"
                                 );
+
+                                let pool_clone = pool.clone();
+                                let rng_clone = rng.clone();
+                                let min_conns = pool_size;
+                                tokio::spawn(async move {
+                                    crate::transport::middle_proxy::me_health_monitor(
+                                        pool_clone, rng_clone, min_conns,
+                                    )
+                                    .await;
+                                });
+
+                                break Some(pool);
                             }
-                            pool.reset_stun_state();
-                            tokio::time::sleep(Duration::from_secs(2)).await;
+                            Err(e) => {
+                                startup_tracker.set_me_last_error(Some(e.to_string())).await;
+                                let retries_limited = me_init_retry_attempts > 0;
+                                if retries_limited && init_attempt >= me_init_retry_attempts {
+                                    startup_tracker
+                                        .fail_component(
+                                            COMPONENT_ME_POOL_INIT_STAGE1,
+                                            Some("ME init retry budget exhausted".to_string()),
+                                        )
+                                        .await;
+                                    startup_tracker
+                                        .set_me_status(StartupMeStatus::Failed, "failed")
+                                        .await;
+                                    error!(
+                                        error = %e,
+                                        attempt = init_attempt,
+                                        retry_limit = me_init_retry_attempts,
+                                        "ME pool init retries exhausted; startup cannot continue in middle-proxy mode"
+                                    );
+                                    break None;
+                                }
+
+                                let retry_limit = if me_init_retry_attempts == 0 {
+                                    String::from("unlimited")
+                                } else {
+                                    me_init_retry_attempts.to_string()
+                                };
+                                if init_attempt >= me_init_warn_after_attempts {
+                                    warn!(
+                                        error = %e,
+                                        attempt = init_attempt,
+                                        retry_limit = retry_limit,
+                                        me2dc_fallback = me2dc_fallback,
+                                        retry_in_secs = 2,
+                                        "ME pool is not ready yet; retrying startup initialization"
+                                    );
+                                } else {
+                                    info!(
+                                        error = %e,
+                                        attempt = init_attempt,
+                                        retry_limit = retry_limit,
+                                        me2dc_fallback = me2dc_fallback,
+                                        retry_in_secs = 2,
+                                        "ME pool startup warmup: retrying initialization"
+                                    );
+                                }
+                                pool.reset_stun_state();
+                                tokio::time::sleep(Duration::from_secs(2)).await;
+                            }
                         }
                     }
                 }

@@ -99,6 +99,7 @@ Notes:
 | `GET` | `/v1/runtime/me_quality` | none | `200` | `RuntimeMeQualityData` |
 | `GET` | `/v1/runtime/upstream_quality` | none | `200` | `RuntimeUpstreamQualityData` |
 | `GET` | `/v1/runtime/nat_stun` | none | `200` | `RuntimeNatStunData` |
+| `GET` | `/v1/runtime/me-selftest` | none | `200` | `RuntimeMeSelftestData` |
 | `GET` | `/v1/runtime/connections/summary` | none | `200` | `RuntimeEdgeConnectionsSummaryData` |
 | `GET` | `/v1/runtime/events/recent` | none | `200` | `RuntimeEdgeEventsData` |
 | `GET` | `/v1/stats/users` | none | `200` | `UserInfo[]` |
@@ -560,6 +561,67 @@ Note: the request contract is defined, but the corresponding route currently ret
 | `addr` | `string` | Reflected public endpoint (`ip:port`). |
 | `age_secs` | `u64` | Reflection value age in seconds. |
 
+### `RuntimeMeSelftestData`
+| Field | Type | Description |
+| --- | --- | --- |
+| `enabled` | `bool` | Runtime payload availability. |
+| `reason` | `string?` | `source_unavailable` when ME pool is unavailable. |
+| `generated_at_epoch_secs` | `u64` | Snapshot generation timestamp. |
+| `data` | `RuntimeMeSelftestPayload?` | Null when unavailable. |
+
+#### `RuntimeMeSelftestPayload`
+| Field | Type | Description |
+| --- | --- | --- |
+| `kdf` | `RuntimeMeSelftestKdfData` | KDF EWMA health state. |
+| `timeskew` | `RuntimeMeSelftestTimeskewData` | Date-header skew health state. |
+| `ip` | `RuntimeMeSelftestIpData` | Interface IP family classification. |
+| `pid` | `RuntimeMeSelftestPidData` | Process PID marker (`one|non-one`). |
+| `bnd` | `RuntimeMeSelftestBndData` | SOCKS BND.ADDR/BND.PORT health state. |
+
+#### `RuntimeMeSelftestKdfData`
+| Field | Type | Description |
+| --- | --- | --- |
+| `state` | `string` | `ok` or `error` based on EWMA threshold. |
+| `ewma_errors_per_min` | `f64` | EWMA KDF error rate per minute. |
+| `threshold_errors_per_min` | `f64` | Threshold used for `error` decision. |
+| `errors_total` | `u64` | Total source errors (`kdf_drift + socks_kdf_strict_reject`). |
+
+#### `RuntimeMeSelftestTimeskewData`
+| Field | Type | Description |
+| --- | --- | --- |
+| `state` | `string` | `ok` or `error` (`max_skew_secs_15m > 60` => `error`). |
+| `max_skew_secs_15m` | `u64?` | Maximum observed skew in the last 15 minutes. |
+| `samples_15m` | `usize` | Number of skew samples in the last 15 minutes. |
+| `last_skew_secs` | `u64?` | Latest observed skew value. |
+| `last_source` | `string?` | Latest skew source marker. |
+| `last_seen_age_secs` | `u64?` | Age of the latest skew sample. |
+
+#### `RuntimeMeSelftestIpData`
+| Field | Type | Description |
+| --- | --- | --- |
+| `v4` | `RuntimeMeSelftestIpFamilyData?` | IPv4 interface probe result; absent when unknown. |
+| `v6` | `RuntimeMeSelftestIpFamilyData?` | IPv6 interface probe result; absent when unknown. |
+
+#### `RuntimeMeSelftestIpFamilyData`
+| Field | Type | Description |
+| --- | --- | --- |
+| `addr` | `string` | Detected interface IP. |
+| `state` | `string` | `good`, `bogon`, or `loopback`. |
+
+#### `RuntimeMeSelftestPidData`
+| Field | Type | Description |
+| --- | --- | --- |
+| `pid` | `u32` | Current process PID. |
+| `state` | `string` | `one` when PID=1, otherwise `non-one`. |
+
+#### `RuntimeMeSelftestBndData`
+| Field | Type | Description |
+| --- | --- | --- |
+| `addr_state` | `string` | `ok`, `bogon`, or `error`. |
+| `port_state` | `string` | `ok`, `zero`, or `error`. |
+| `last_addr` | `string?` | Latest observed SOCKS BND address. |
+| `last_seen_age_secs` | `u64?` | Age of latest BND sample. |
+
 ### `RuntimeEdgeConnectionsSummaryData`
 | Field | Type | Description |
 | --- | --- | --- |
@@ -971,11 +1033,15 @@ Note: the request contract is defined, but the corresponding route currently ret
 | `tls` | `string[]` | Active `tg://proxy` links for EE-TLS mode (for each host+TLS domain). |
 
 Link generation uses active config and enabled modes:
-- `[general.links].public_host/public_port` have priority.
-- If `public_host` is not set, startup-detected public IPs are used when they are present in API runtime context.
-- Fallback host sources: listener `announce`, `announce_ip`, explicit listener `ip`.
-- Legacy fallback: `listen_addr_ipv4` and `listen_addr_ipv6` when routable.
-- Startup-detected IP values are process-static after API task bootstrap.
+- Link port is `general.links.public_port` when configured; otherwise `server.port`.
+- If `general.links.public_host` is non-empty, it is used as the single link host override.
+- If `public_host` is not set, hosts are resolved from `server.listeners` in order:
+  `announce` -> `announce_ip` -> listener bind `ip`.
+- For wildcard listener IPs (`0.0.0.0` / `::`), startup-detected external IP of the same family is used when available.
+- Listener-derived hosts are de-duplicated while preserving first-seen order.
+- If multiple hosts are resolved, API returns links for all resolved hosts in every enabled mode.
+- If no host can be resolved from listeners, fallback is startup-detected `IPv4 -> IPv6`.
+- Final compatibility fallback uses `listen_addr_ipv4`/`listen_addr_ipv6` when routable, otherwise `"UNKNOWN"`.
 - User rows are sorted by `username` in ascending lexical order.
 
 ### `CreateUserResponse`
@@ -988,16 +1054,20 @@ Link generation uses active config and enabled modes:
 
 | Endpoint | Notes |
 | --- | --- |
-| `POST /v1/users` | Creates user and validates resulting config before atomic save. |
-| `PATCH /v1/users/{username}` | Partial update of provided fields only. Missing fields remain unchanged. |
+| `POST /v1/users` | Creates user, validates config, then atomically updates only affected `access.*` TOML tables (`access.users` always, plus optional per-user tables present in request). |
+| `PATCH /v1/users/{username}` | Partial update of provided fields only. Missing fields remain unchanged. Current implementation persists full config document on success. |
 | `POST /v1/users/{username}/rotate-secret` | Currently returns `404` in runtime route matcher; request schema is reserved for intended behavior. |
-| `DELETE /v1/users/{username}` | Deletes user and related optional settings. Last user deletion is blocked. |
+| `DELETE /v1/users/{username}` | Deletes only specified user, removes this user from related optional `access.user_*` maps, blocks last-user deletion, and atomically updates only related `access.*` TOML tables. |
 
 All mutating endpoints:
 - Respect `read_only` mode.
 - Accept optional `If-Match` for optimistic concurrency.
 - Return new `revision` after successful write.
 - Use process-local mutation lock + atomic write (`tmp + rename`) for config persistence.
+
+Delete path cleanup guarantees:
+- Config cleanup removes only the requested username keys.
+- Runtime unique-IP cleanup removes only this user's limiter and tracked IP state.
 
 ## Runtime State Matrix
 
@@ -1020,8 +1090,19 @@ Additional runtime endpoint behavior:
 | `/v1/runtime/me_quality` | No | ME pool snapshot unavailable | `enabled=true`, full payload |
 | `/v1/runtime/upstream_quality` | No | Upstream runtime snapshot unavailable | `enabled=true`, full payload |
 | `/v1/runtime/nat_stun` | No | STUN shared state unavailable | `enabled=true`, full payload |
+| `/v1/runtime/me-selftest` | No | ME pool unavailable => `enabled=false`, `reason=source_unavailable` | `enabled=true`, full payload |
 | `/v1/runtime/connections/summary` | `runtime_edge_enabled=false` => `enabled=false`, `reason=feature_disabled` | Recompute lock contention with no cache entry => `enabled=true`, `reason=source_unavailable` | `enabled=true`, full payload |
 | `/v1/runtime/events/recent` | `runtime_edge_enabled=false` => `enabled=false`, `reason=feature_disabled` | Not used in current implementation | `enabled=true`, full payload |
+
+## ME Fallback Behavior Exposed Via API
+
+When `general.use_middle_proxy=true` and `general.me2dc_fallback=true`:
+- Startup does not block on full ME pool readiness; initialization can continue in background.
+- Runtime initialization payload can expose ME stage `background_init` until pool becomes ready.
+- Admission/routing decision uses two readiness grace windows for "ME not ready" periods:
+  `80s` before first-ever readiness is observed (startup grace),
+  `6s` after readiness has been observed at least once (runtime failover timeout).
+- While in fallback window breach, new sessions are routed via Direct-DC; when ME becomes ready, routing returns to Middle mode for new sessions.
 
 ## Serialization Rules
 
@@ -1046,7 +1127,7 @@ Additional runtime endpoint behavior:
 | Runtime apply path | Successful writes are picked up by existing config watcher/hot-reload path. |
 | Exposure | Built-in TLS/mTLS is not provided. Use loopback bind + reverse proxy if needed. |
 | Pagination | User list currently has no pagination/filtering. |
-| Serialization side effect | Config comments/manual formatting are not preserved on write. |
+| Serialization side effect | Updated TOML table bodies are re-serialized on write. Endpoints that persist full config can still rewrite broader formatting/comments. |
 
 ## Known Limitations (Current Release)
 
