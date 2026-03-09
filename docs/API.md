@@ -1033,10 +1033,13 @@ Note: the request contract is defined, but the corresponding route currently ret
 | `tls` | `string[]` | Active `tg://proxy` links for EE-TLS mode (for each host+TLS domain). |
 
 Link generation uses active config and enabled modes:
-- `[general.links].public_host/public_port` have priority.
+- Link port is `general.links.public_port` when configured; otherwise `server.port`.
+- If `general.links.public_host` is non-empty, it is used as the single link host override.
 - If `public_host` is not set, hosts are resolved from `server.listeners` in order:
   `announce` -> `announce_ip` -> listener bind `ip`.
 - For wildcard listener IPs (`0.0.0.0` / `::`), startup-detected external IP of the same family is used when available.
+- Listener-derived hosts are de-duplicated while preserving first-seen order.
+- If multiple hosts are resolved, API returns links for all resolved hosts in every enabled mode.
 - If no host can be resolved from listeners, fallback is startup-detected `IPv4 -> IPv6`.
 - Final compatibility fallback uses `listen_addr_ipv4`/`listen_addr_ipv6` when routable, otherwise `"UNKNOWN"`.
 - User rows are sorted by `username` in ascending lexical order.
@@ -1051,16 +1054,20 @@ Link generation uses active config and enabled modes:
 
 | Endpoint | Notes |
 | --- | --- |
-| `POST /v1/users` | Creates user and validates resulting config before atomic save. |
-| `PATCH /v1/users/{username}` | Partial update of provided fields only. Missing fields remain unchanged. |
+| `POST /v1/users` | Creates user, validates config, then atomically updates only affected `access.*` TOML tables (`access.users` always, plus optional per-user tables present in request). |
+| `PATCH /v1/users/{username}` | Partial update of provided fields only. Missing fields remain unchanged. Current implementation persists full config document on success. |
 | `POST /v1/users/{username}/rotate-secret` | Currently returns `404` in runtime route matcher; request schema is reserved for intended behavior. |
-| `DELETE /v1/users/{username}` | Deletes user and related optional settings. Last user deletion is blocked. |
+| `DELETE /v1/users/{username}` | Deletes only specified user, removes this user from related optional `access.user_*` maps, blocks last-user deletion, and atomically updates only related `access.*` TOML tables. |
 
 All mutating endpoints:
 - Respect `read_only` mode.
 - Accept optional `If-Match` for optimistic concurrency.
 - Return new `revision` after successful write.
 - Use process-local mutation lock + atomic write (`tmp + rename`) for config persistence.
+
+Delete path cleanup guarantees:
+- Config cleanup removes only the requested username keys.
+- Runtime unique-IP cleanup removes only this user's limiter and tracked IP state.
 
 ## Runtime State Matrix
 
@@ -1087,6 +1094,16 @@ Additional runtime endpoint behavior:
 | `/v1/runtime/connections/summary` | `runtime_edge_enabled=false` => `enabled=false`, `reason=feature_disabled` | Recompute lock contention with no cache entry => `enabled=true`, `reason=source_unavailable` | `enabled=true`, full payload |
 | `/v1/runtime/events/recent` | `runtime_edge_enabled=false` => `enabled=false`, `reason=feature_disabled` | Not used in current implementation | `enabled=true`, full payload |
 
+## ME Fallback Behavior Exposed Via API
+
+When `general.use_middle_proxy=true` and `general.me2dc_fallback=true`:
+- Startup does not block on full ME pool readiness; initialization can continue in background.
+- Runtime initialization payload can expose ME stage `background_init` until pool becomes ready.
+- Admission/routing decision uses two readiness grace windows for "ME not ready" periods:
+  `80s` before first-ever readiness is observed (startup grace),
+  `6s` after readiness has been observed at least once (runtime failover timeout).
+- While in fallback window breach, new sessions are routed via Direct-DC; when ME becomes ready, routing returns to Middle mode for new sessions.
+
 ## Serialization Rules
 
 - Success responses always include `revision`.
@@ -1110,7 +1127,7 @@ Additional runtime endpoint behavior:
 | Runtime apply path | Successful writes are picked up by existing config watcher/hot-reload path. |
 | Exposure | Built-in TLS/mTLS is not provided. Use loopback bind + reverse proxy if needed. |
 | Pagination | User list currently has no pagination/filtering. |
-| Serialization side effect | Config comments/manual formatting are not preserved on write. |
+| Serialization side effect | Updated TOML table bodies are re-serialized on write. Endpoints that persist full config can still rewrite broader formatting/comments. |
 
 ## Known Limitations (Current Release)
 
