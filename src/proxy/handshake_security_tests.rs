@@ -980,3 +980,17 @@ fn auth_probe_success_clears_whole_ipv6_prefix_bucket() {
         "success from the same /64 must clear the shared bucket"
     );
 }
+
+#[test]
+fn auth_probe_eviction_offset_varies_with_input() {
+    let now = Instant::now();
+    let ip1 = IpAddr::V4(Ipv4Addr::new(198, 51, 100, 10));
+    let ip2 = IpAddr::V4(Ipv4Addr::new(198, 51, 100, 11));
+
+    let a = auth_probe_eviction_offset(ip1, now);
+    let b = auth_probe_eviction_offset(ip1, now);
+    let c = auth_probe_eviction_offset(ip2, now);
+
+    assert_eq!(a, b, "same input must yield deterministic offset");
+    assert_ne!(a, c, "different peer IPs should not collapse to one offset");
+}

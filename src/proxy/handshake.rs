@@ -7,6 +7,8 @@ use std::collections::HashSet;
 use std::net::{IpAddr, Ipv6Addr};
 use std::sync::Arc;
 use std::sync::{Mutex, OnceLock};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::time::{Duration, Instant};
 use dashmap::DashMap;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
@@ -84,6 +86,13 @@ fn auth_probe_state_expired(state: &AuthProbeState, now: Instant) -> bool {
     now.duration_since(state.last_seen) > retention
 }
 
+fn auth_probe_eviction_offset(peer_ip: IpAddr, now: Instant) -> usize {
+    let mut hasher = DefaultHasher::new();
+    peer_ip.hash(&mut hasher);
+    now.hash(&mut hasher);
+    hasher.finish() as usize
+}
+
 fn auth_probe_is_throttled(peer_ip: IpAddr, now: Instant) -> bool {
     let peer_ip = normalize_auth_probe_ip(peer_ip);
     let state = auth_probe_state_map();
@@ -126,11 +135,9 @@ fn auth_probe_record_failure_with_state(
 
     if state.len() >= AUTH_PROBE_TRACK_MAX_ENTRIES {
         let mut stale_keys = Vec::new();
-        let mut eviction_candidate = None;
+        let mut eviction_candidates = Vec::new();
         for entry in state.iter().take(AUTH_PROBE_PRUNE_SCAN_LIMIT) {
-            if eviction_candidate.is_none() {
-                eviction_candidate = Some(*entry.key());
-            }
+            eviction_candidates.push(*entry.key());
             if auth_probe_state_expired(entry.value(), now) {
                 stale_keys.push(*entry.key());
             }
@@ -139,9 +146,11 @@ fn auth_probe_record_failure_with_state(
             state.remove(&stale_key);
         }
         if state.len() >= AUTH_PROBE_TRACK_MAX_ENTRIES {
-            let Some(evict_key) = eviction_candidate else {
+            if eviction_candidates.is_empty() {
                 return;
-            };
+            }
+            let idx = auth_probe_eviction_offset(peer_ip, now) % eviction_candidates.len();
+            let evict_key = eviction_candidates[idx];
             state.remove(&evict_key);
         }
     }

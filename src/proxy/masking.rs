@@ -236,17 +236,16 @@ where
         return;
     }
 
-    let c2m = tokio::spawn(async move {
-        let _ = tokio::io::copy(&mut reader, &mut mask_write).await;
-        let _ = mask_write.shutdown().await;
-    });
-
-    let m2c = tokio::spawn(async move {
-        let _ = tokio::io::copy(&mut mask_read, &mut writer).await;
-        let _ = writer.shutdown().await;
-    });
-
-    let _ = tokio::join!(c2m, m2c);
+    let _ = tokio::join!(
+        async {
+            let _ = tokio::io::copy(&mut reader, &mut mask_write).await;
+            let _ = mask_write.shutdown().await;
+        },
+        async {
+            let _ = tokio::io::copy(&mut mask_read, &mut writer).await;
+            let _ = writer.shutdown().await;
+        }
+    );
 }
 
 /// Just consume all data from client without responding

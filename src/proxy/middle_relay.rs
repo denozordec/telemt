@@ -807,8 +807,8 @@ where
             payload.truncate(secure_payload_len);
         }
         *frame_counter += 1;
-        let payload = payload.take().freeze();
-        return Ok(Some((payload, quickack)));
+        let payload_bytes = Bytes::copy_from_slice(&payload[..]);
+        return Ok(Some((payload_bytes, quickack)));
     }
 }
 

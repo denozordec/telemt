@@ -429,3 +429,50 @@ async fn read_client_payload_abridged_extended_len_sets_quickack() {
     assert_eq!(frame.len(), payload_len);
     assert_eq!(frame_counter, 1, "one abridged frame must be counted");
 }
+
+#[tokio::test]
+async fn read_client_payload_returns_buffer_to_pool_after_emit() {
+    let _guard = desync_dedup_test_lock()
+        .lock()
+        .expect("middle relay test lock must be available");
+
+    let pool = Arc::new(BufferPool::with_config(64, 8));
+    pool.preallocate(1);
+    assert_eq!(pool.stats().pooled, 1, "precondition: one pooled buffer");
+
+    let (reader, mut writer) = duplex(4096);
+    let mut crypto_reader = make_crypto_reader(reader);
+    let stats = Stats::new();
+    let forensics = make_forensics_state();
+    let mut frame_counter = 0;
+
+    // Force growth beyond default pool buffer size to catch ownership-take regressions.
+    let payload_len = 257usize;
+    let mut plaintext = Vec::with_capacity(4 + payload_len);
+    plaintext.extend_from_slice(&(payload_len as u32).to_le_bytes());
+    plaintext.extend((0..payload_len).map(|idx| (idx as u8).wrapping_mul(13)));
+
+    let encrypted = encrypt_for_reader(&plaintext);
+    writer.write_all(&encrypted).await.unwrap();
+
+    let _ = read_client_payload(
+        &mut crypto_reader,
+        ProtoTag::Intermediate,
+        payload_len + 8,
+        TokioDuration::from_secs(1),
+        &pool,
+        &forensics,
+        &mut frame_counter,
+        &stats,
+    )
+    .await
+    .expect("payload read must succeed")
+    .expect("frame must be present");
+
+    assert_eq!(frame_counter, 1);
+    let pool_stats = pool.stats();
+    assert!(
+        pool_stats.pooled >= 1,
+        "emitted payload buffer must be returned to pool to avoid pool drain"
+    );
+}

@@ -1,5 +1,7 @@
 use super::*;
 use crate::config::ProxyConfig;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use tokio::io::{duplex, AsyncBufReadExt, BufReader};
@@ -542,6 +544,54 @@ impl tokio::io::AsyncWrite for PendingWriter {
     }
 }
 
+struct DropTrackedPendingReader {
+    dropped: Arc<AtomicBool>,
+}
+
+impl tokio::io::AsyncRead for DropTrackedPendingReader {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        _buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        Poll::Pending
+    }
+}
+
+impl Drop for DropTrackedPendingReader {
+    fn drop(&mut self) {
+        self.dropped.store(true, Ordering::SeqCst);
+    }
+}
+
+struct DropTrackedPendingWriter {
+    dropped: Arc<AtomicBool>,
+}
+
+impl tokio::io::AsyncWrite for DropTrackedPendingWriter {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        _buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        Poll::Pending
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+}
+
+impl Drop for DropTrackedPendingWriter {
+    fn drop(&mut self) {
+        self.dropped.store(true, Ordering::SeqCst);
+    }
+}
+
 #[tokio::test]
 async fn proxy_header_write_timeout_returns_false() {
     let mut writer = PendingWriter;
@@ -644,4 +694,38 @@ async fn relay_to_mask_preserves_backend_response_after_client_half_close() {
 
     timeout(Duration::from_secs(1), fallback_task).await.unwrap().unwrap();
     timeout(Duration::from_secs(1), backend_task).await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn relay_to_mask_timeout_cancels_and_drops_all_io_endpoints() {
+    let reader_dropped = Arc::new(AtomicBool::new(false));
+    let writer_dropped = Arc::new(AtomicBool::new(false));
+    let mask_reader_dropped = Arc::new(AtomicBool::new(false));
+    let mask_writer_dropped = Arc::new(AtomicBool::new(false));
+
+    let reader = DropTrackedPendingReader {
+        dropped: reader_dropped.clone(),
+    };
+    let writer = DropTrackedPendingWriter {
+        dropped: writer_dropped.clone(),
+    };
+    let mask_read = DropTrackedPendingReader {
+        dropped: mask_reader_dropped.clone(),
+    };
+    let mask_write = DropTrackedPendingWriter {
+        dropped: mask_writer_dropped.clone(),
+    };
+
+    let timed = timeout(
+        Duration::from_millis(40),
+        relay_to_mask(reader, writer, mask_read, mask_write, b""),
+    )
+    .await;
+
+    assert!(timed.is_err(), "stalled relay must be bounded by timeout");
+
+    assert!(reader_dropped.load(Ordering::SeqCst));
+    assert!(writer_dropped.load(Ordering::SeqCst));
+    assert!(mask_reader_dropped.load(Ordering::SeqCst));
+    assert!(mask_writer_dropped.load(Ordering::SeqCst));
 }
