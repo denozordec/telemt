@@ -11,8 +11,9 @@ use tracing::{debug, info, warn};
 use std::collections::hash_map::DefaultHasher;
 
 use crate::crypto::SecureRandom;
+use crate::network::IpFamily;
 
-use super::pool::{MePool, WriterContour};
+use super::pool::{MeDrainGateReason, MePool, WriterContour};
 
 const ME_HARDSWAP_PENDING_TTL_SECS: u64 = 1800;
 
@@ -120,9 +121,10 @@ impl MePool {
     }
 
     async fn desired_dc_endpoints(&self) -> HashMap<i32, HashSet<SocketAddr>> {
+        let now_epoch_secs = Self::now_epoch_secs();
         let mut out: HashMap<i32, HashSet<SocketAddr>> = HashMap::new();
 
-        if self.decision.ipv4_me {
+        if self.family_enabled_for_drain_coverage(IpFamily::V4, now_epoch_secs) {
             let map_v4 = self.proxy_map_v4.read().await.clone();
             for (dc, addrs) in map_v4 {
                 let entry = out.entry(dc).or_default();
@@ -132,7 +134,7 @@ impl MePool {
             }
         }
 
-        if self.decision.ipv6_me {
+        if self.family_enabled_for_drain_coverage(IpFamily::V6, now_epoch_secs) {
             let map_v6 = self.proxy_map_v6.read().await.clone();
             for (dc, addrs) in map_v6 {
                 let entry = out.entry(dc).or_default();
@@ -313,13 +315,23 @@ impl MePool {
 
     pub async fn zero_downtime_reinit_after_map_change(self: &Arc<Self>, rng: &SecureRandom) {
         let desired_by_dc = self.desired_dc_endpoints().await;
+        let now_epoch_secs = Self::now_epoch_secs();
+        let v4_suppressed = self.is_family_temporarily_suppressed(IpFamily::V4, now_epoch_secs);
+        let v6_suppressed = self.is_family_temporarily_suppressed(IpFamily::V6, now_epoch_secs);
         if desired_by_dc.is_empty() {
             warn!("ME endpoint map is empty; skipping stale writer drain");
+            let reason = if (self.decision.ipv4_me && v4_suppressed)
+                || (self.decision.ipv6_me && v6_suppressed)
+            {
+                MeDrainGateReason::SuppressionActive
+            } else {
+                MeDrainGateReason::CoverageQuorum
+            };
+            self.set_last_drain_gate(false, false, reason, now_epoch_secs);
             return;
         }
 
         let desired_map_hash = Self::desired_map_hash(&desired_by_dc);
-        let now_epoch_secs = Self::now_epoch_secs();
         let previous_generation = self.current_generation();
         let hardswap = self.hardswap.load(Ordering::Relaxed);
         let generation = if hardswap {
@@ -390,7 +402,17 @@ impl MePool {
                 .load(Ordering::Relaxed),
         );
         let (coverage_ratio, missing_dc) = Self::coverage_ratio(&desired_by_dc, &active_writer_addrs);
+        let mut route_quorum_ok = coverage_ratio >= min_ratio;
+        let mut redundancy_ok = missing_dc.is_empty();
+        let mut redundancy_missing_dc = missing_dc.clone();
+        let mut gate_coverage_ratio = coverage_ratio;
         if !hardswap && coverage_ratio < min_ratio {
+            self.set_last_drain_gate(
+                false,
+                redundancy_ok,
+                MeDrainGateReason::CoverageQuorum,
+                now_epoch_secs,
+            );
             warn!(
                 previous_generation,
                 generation,
@@ -411,7 +433,17 @@ impl MePool {
                 .collect();
             let (fresh_coverage_ratio, fresh_missing_dc) =
                 Self::coverage_ratio(&desired_by_dc, &fresh_writer_addrs);
-            if !fresh_missing_dc.is_empty() {
+            route_quorum_ok = fresh_coverage_ratio >= min_ratio;
+            redundancy_ok = fresh_missing_dc.is_empty();
+            redundancy_missing_dc = fresh_missing_dc.clone();
+            gate_coverage_ratio = fresh_coverage_ratio;
+            if fresh_coverage_ratio < min_ratio {
+                self.set_last_drain_gate(
+                    false,
+                    redundancy_ok,
+                    MeDrainGateReason::CoverageQuorum,
+                    now_epoch_secs,
+                );
                 warn!(
                     previous_generation,
                     generation,
@@ -421,13 +453,16 @@ impl MePool {
                 );
                 return;
             }
-        } else if !missing_dc.is_empty() {
+        }
+
+        self.set_last_drain_gate(route_quorum_ok, redundancy_ok, MeDrainGateReason::Open, now_epoch_secs);
+        if !redundancy_ok {
             warn!(
-                missing_dc = ?missing_dc,
-                // Keep stale writers alive when fresh coverage is incomplete.
-                "ME reinit coverage incomplete; keeping stale writers"
+                missing_dc = ?redundancy_missing_dc,
+                coverage_ratio = format_args!("{gate_coverage_ratio:.3}"),
+                min_ratio = format_args!("{min_ratio:.3}"),
+                "ME reinit proceeds with weighted quorum while some DC groups remain uncovered"
             );
-            return;
         }
 
         if hardswap {

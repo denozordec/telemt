@@ -13,7 +13,7 @@ use crate::network::IpFamily;
 use crate::stats::MeWriterTeardownReason;
 
 use super::MePool;
-use super::pool::MeWriter;
+use super::pool::{MeFamilyRuntimeState, MeWriter};
 
 const JITTER_FRAC_NUM: u64 = 2; // jitter up to 50% of backoff
 #[allow(dead_code)]
@@ -34,6 +34,33 @@ const HEALTH_DRAIN_SOFT_EVICT_BUDGET_MIN: usize = 8;
 const HEALTH_DRAIN_SOFT_EVICT_BUDGET_MAX: usize = 256;
 const HEALTH_DRAIN_REAP_OPPORTUNISTIC_INTERVAL_SECS: u64 = 1;
 const HEALTH_DRAIN_TIMEOUT_ENFORCER_INTERVAL_SECS: u64 = 1;
+const FAMILY_SUPPRESS_FAIL_STREAK_THRESHOLD: u32 = 6;
+const FAMILY_SUPPRESS_WINDOW_SECS: u64 = 120;
+const FAMILY_RECOVER_PROBE_INTERVAL_SECS: u64 = 5;
+const FAMILY_RECOVER_SUCCESS_STREAK_REQUIRED: u32 = 3;
+
+#[derive(Debug, Clone)]
+struct FamilyCircuitState {
+    state: MeFamilyRuntimeState,
+    state_since_at: Instant,
+    suppressed_until: Option<Instant>,
+    next_probe_at: Instant,
+    fail_streak: u32,
+    recover_success_streak: u32,
+}
+
+impl FamilyCircuitState {
+    fn new(now: Instant) -> Self {
+        Self {
+            state: MeFamilyRuntimeState::Healthy,
+            state_since_at: now,
+            suppressed_until: None,
+            next_probe_at: now,
+            fail_streak: 0,
+            recover_success_streak: 0,
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 struct DcFloorPlanEntry {
@@ -73,6 +100,25 @@ pub async fn me_health_monitor(pool: Arc<MePool>, rng: Arc<SecureRandom>, _min_c
     let mut floor_warn_next_allowed: HashMap<(i32, IpFamily), Instant> = HashMap::new();
     let mut drain_warn_next_allowed: HashMap<u64, Instant> = HashMap::new();
     let mut drain_soft_evict_next_allowed: HashMap<u64, Instant> = HashMap::new();
+    let mut family_v4_circuit = FamilyCircuitState::new(Instant::now());
+    let mut family_v6_circuit = FamilyCircuitState::new(Instant::now());
+    let init_epoch_secs = MePool::now_epoch_secs();
+    pool.set_family_runtime_state(
+        IpFamily::V4,
+        family_v4_circuit.state,
+        init_epoch_secs,
+        0,
+        family_v4_circuit.fail_streak,
+        family_v4_circuit.recover_success_streak,
+    );
+    pool.set_family_runtime_state(
+        IpFamily::V6,
+        family_v6_circuit.state,
+        init_epoch_secs,
+        0,
+        family_v6_circuit.fail_streak,
+        family_v6_circuit.recover_success_streak,
+    );
     let mut degraded_interval = true;
     loop {
         let interval = if degraded_interval {
@@ -88,7 +134,9 @@ pub async fn me_health_monitor(pool: Arc<MePool>, rng: Arc<SecureRandom>, _min_c
             &mut drain_soft_evict_next_allowed,
         )
         .await;
-        let v4_degraded = check_family(
+        let now = Instant::now();
+        let now_epoch_secs = MePool::now_epoch_secs();
+        let v4_degraded_raw = check_family(
             IpFamily::V4,
             &pool,
             &rng,
@@ -107,25 +155,53 @@ pub async fn me_health_monitor(pool: Arc<MePool>, rng: Arc<SecureRandom>, _min_c
             &mut drain_soft_evict_next_allowed,
         )
         .await;
-        let v6_degraded = check_family(
-            IpFamily::V6,
+        let v4_degraded = apply_family_circuit_result(
             &pool,
-            &rng,
-            &mut backoff,
-            &mut next_attempt,
-            &mut inflight,
-            &mut outage_backoff,
-            &mut outage_next_attempt,
-            &mut single_endpoint_outage,
-            &mut shadow_rotate_deadline,
-            &mut idle_refresh_next_attempt,
-            &mut adaptive_idle_since,
-            &mut adaptive_recover_until,
-            &mut floor_warn_next_allowed,
-            &mut drain_warn_next_allowed,
-            &mut drain_soft_evict_next_allowed,
-        )
-        .await;
+            IpFamily::V4,
+            &mut family_v4_circuit,
+            Some(v4_degraded_raw),
+            false,
+            now,
+            now_epoch_secs,
+        );
+
+        let v6_check_ran = should_run_family_check(&mut family_v6_circuit, now);
+        let v6_degraded_raw = if v6_check_ran {
+            check_family(
+                IpFamily::V6,
+                &pool,
+                &rng,
+                &mut backoff,
+                &mut next_attempt,
+                &mut inflight,
+                &mut outage_backoff,
+                &mut outage_next_attempt,
+                &mut single_endpoint_outage,
+                &mut shadow_rotate_deadline,
+                &mut idle_refresh_next_attempt,
+                &mut adaptive_idle_since,
+                &mut adaptive_recover_until,
+                &mut floor_warn_next_allowed,
+                &mut drain_warn_next_allowed,
+                &mut drain_soft_evict_next_allowed,
+            )
+            .await
+        } else {
+            false
+        };
+        let v6_degraded = apply_family_circuit_result(
+            &pool,
+            IpFamily::V6,
+            &mut family_v6_circuit,
+            if v6_check_ran {
+                Some(v6_degraded_raw)
+            } else {
+                None
+            },
+            true,
+            now,
+            now_epoch_secs,
+        );
         degraded_interval = v4_degraded || v6_degraded;
     }
 }
@@ -145,6 +221,148 @@ pub async fn me_drain_timeout_enforcer(pool: Arc<MePool>) {
         )
         .await;
     }
+}
+
+fn should_run_family_check(circuit: &mut FamilyCircuitState, now: Instant) -> bool {
+    match circuit.state {
+        MeFamilyRuntimeState::Suppressed => {
+            if now < circuit.next_probe_at {
+                return false;
+            }
+            circuit.next_probe_at =
+                now + Duration::from_secs(FAMILY_RECOVER_PROBE_INTERVAL_SECS);
+            true
+        }
+        _ => true,
+    }
+}
+
+fn apply_family_circuit_result(
+    pool: &Arc<MePool>,
+    family: IpFamily,
+    circuit: &mut FamilyCircuitState,
+    degraded: Option<bool>,
+    allow_suppress: bool,
+    now: Instant,
+    now_epoch_secs: u64,
+) -> bool {
+    let Some(degraded) = degraded else {
+        // Preserve suppression state when probe tick is intentionally skipped.
+        return false;
+    };
+
+    let previous_state = circuit.state;
+    match circuit.state {
+        MeFamilyRuntimeState::Suppressed => {
+            if degraded {
+                circuit.fail_streak = circuit.fail_streak.saturating_add(1);
+                circuit.recover_success_streak = 0;
+                let until = now + Duration::from_secs(FAMILY_SUPPRESS_WINDOW_SECS);
+                circuit.suppressed_until = Some(until);
+                circuit.state_since_at = now;
+                warn!(
+                    ?family,
+                    fail_streak = circuit.fail_streak,
+                    suppress_secs = FAMILY_SUPPRESS_WINDOW_SECS,
+                    "ME family remains suppressed due to ongoing failures"
+                );
+            } else {
+                circuit.fail_streak = 0;
+                circuit.recover_success_streak = 1;
+                circuit.state = MeFamilyRuntimeState::Recovering;
+            }
+        }
+        MeFamilyRuntimeState::Recovering => {
+            if degraded {
+                circuit.fail_streak = circuit.fail_streak.saturating_add(1);
+                if allow_suppress {
+                    circuit.state = MeFamilyRuntimeState::Suppressed;
+                    let until = now + Duration::from_secs(FAMILY_SUPPRESS_WINDOW_SECS);
+                    circuit.suppressed_until = Some(until);
+                    circuit.next_probe_at =
+                        now + Duration::from_secs(FAMILY_RECOVER_PROBE_INTERVAL_SECS);
+                    warn!(
+                        ?family,
+                        fail_streak = circuit.fail_streak,
+                        suppress_secs = FAMILY_SUPPRESS_WINDOW_SECS,
+                        "ME family temporarily suppressed after repeated degradation"
+                    );
+                } else {
+                    circuit.state = MeFamilyRuntimeState::Degraded;
+                }
+            } else {
+                circuit.recover_success_streak = circuit.recover_success_streak.saturating_add(1);
+                if circuit.recover_success_streak >= FAMILY_RECOVER_SUCCESS_STREAK_REQUIRED {
+                    circuit.fail_streak = 0;
+                    circuit.recover_success_streak = 0;
+                    circuit.suppressed_until = None;
+                    circuit.state = MeFamilyRuntimeState::Healthy;
+                    info!(
+                        ?family,
+                        "ME family suppression lifted after stable recovery probes"
+                    );
+                }
+            }
+        }
+        _ => {
+            if degraded {
+                circuit.fail_streak = circuit.fail_streak.saturating_add(1);
+                circuit.recover_success_streak = 0;
+                circuit.state = MeFamilyRuntimeState::Degraded;
+                if allow_suppress && circuit.fail_streak >= FAMILY_SUPPRESS_FAIL_STREAK_THRESHOLD {
+                    circuit.state = MeFamilyRuntimeState::Suppressed;
+                    let until = now + Duration::from_secs(FAMILY_SUPPRESS_WINDOW_SECS);
+                    circuit.suppressed_until = Some(until);
+                    circuit.next_probe_at =
+                        now + Duration::from_secs(FAMILY_RECOVER_PROBE_INTERVAL_SECS);
+                    warn!(
+                        ?family,
+                        fail_streak = circuit.fail_streak,
+                        suppress_secs = FAMILY_SUPPRESS_WINDOW_SECS,
+                        "ME family temporarily suppressed after repeated degradation"
+                    );
+                }
+            } else {
+                circuit.fail_streak = 0;
+                circuit.recover_success_streak = 0;
+                circuit.suppressed_until = None;
+                circuit.state = MeFamilyRuntimeState::Healthy;
+            }
+        }
+    }
+
+    if previous_state != circuit.state {
+        circuit.state_since_at = now;
+    }
+
+    let suppressed_until_epoch_secs = circuit
+        .suppressed_until
+        .and_then(|until| {
+            if until > now {
+                Some(
+                    now_epoch_secs
+                        .saturating_add(until.saturating_duration_since(now).as_secs()),
+                )
+            } else {
+                None
+            }
+        })
+        .unwrap_or(0);
+    let state_since_epoch_secs = if previous_state == circuit.state {
+        pool.family_runtime_state_since_epoch_secs(family)
+    } else {
+        now_epoch_secs
+    };
+    pool.set_family_runtime_state(
+        family,
+        circuit.state,
+        state_since_epoch_secs,
+        suppressed_until_epoch_secs,
+        circuit.fail_streak,
+        circuit.recover_success_streak,
+    );
+
+    !matches!(circuit.state, MeFamilyRuntimeState::Suppressed) && degraded
 }
 
 fn draining_writer_timeout_expired(
@@ -1746,13 +1964,19 @@ mod tests {
     use tokio::sync::mpsc;
     use tokio_util::sync::CancellationToken;
 
-    use super::reap_draining_writers;
+    use super::{
+        FamilyCircuitState, apply_family_circuit_result, reap_draining_writers,
+        should_run_family_check,
+    };
     use crate::config::{GeneralConfig, MeRouteNoWriterMode, MeSocksKdfPolicy, MeWriterPickMode};
     use crate::crypto::SecureRandom;
+    use crate::network::IpFamily;
     use crate::network::probe::NetworkDecision;
     use crate::stats::Stats;
     use crate::transport::middle_proxy::codec::WriterCommand;
-    use crate::transport::middle_proxy::pool::{MePool, MeWriter, WriterContour};
+    use crate::transport::middle_proxy::pool::{
+        MeFamilyRuntimeState, MePool, MeWriter, WriterContour,
+    };
     use crate::transport::middle_proxy::registry::ConnMeta;
 
     async fn make_pool(me_pool_drain_threshold: u64) -> Arc<MePool> {
@@ -1929,5 +2153,48 @@ mod tests {
         assert_eq!(pool.registry.get_writer(conn_a).await.unwrap().writer_id, 10);
         assert_eq!(pool.registry.get_writer(conn_b).await.unwrap().writer_id, 20);
         assert_eq!(pool.registry.get_writer(conn_c).await.unwrap().writer_id, 30);
+    }
+
+    #[tokio::test]
+    async fn suppressed_family_probe_skip_preserves_suppressed_state() {
+        let pool = make_pool(0).await;
+        let now = Instant::now();
+        let now_epoch_secs = MePool::now_epoch_secs();
+        let suppressed_until_epoch_secs = now_epoch_secs.saturating_add(60);
+        pool.set_family_runtime_state(
+            IpFamily::V6,
+            MeFamilyRuntimeState::Suppressed,
+            now_epoch_secs,
+            suppressed_until_epoch_secs,
+            7,
+            0,
+        );
+
+        let mut circuit = FamilyCircuitState {
+            state: MeFamilyRuntimeState::Suppressed,
+            state_since_at: now,
+            suppressed_until: Some(now + Duration::from_secs(60)),
+            next_probe_at: now + Duration::from_secs(5),
+            fail_streak: 7,
+            recover_success_streak: 0,
+        };
+
+        assert!(!should_run_family_check(&mut circuit, now));
+        assert!(!apply_family_circuit_result(
+            &pool,
+            IpFamily::V6,
+            &mut circuit,
+            None,
+            true,
+            now,
+            now_epoch_secs,
+        ));
+        assert_eq!(circuit.state, MeFamilyRuntimeState::Suppressed);
+        assert_eq!(circuit.fail_streak, 7);
+        assert_eq!(circuit.recover_success_streak, 0);
+        assert_eq!(
+            pool.family_runtime_state(IpFamily::V6),
+            MeFamilyRuntimeState::Suppressed,
+        );
     }
 }

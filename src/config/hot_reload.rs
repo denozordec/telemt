@@ -623,6 +623,7 @@ fn warn_non_hot_changes(old: &ProxyConfig, new: &ProxyConfig, non_hot_changed: b
     }
     if old.censorship.tls_domain != new.censorship.tls_domain
         || old.censorship.tls_domains != new.censorship.tls_domains
+        || old.censorship.tls_fetch_scope != new.censorship.tls_fetch_scope
         || old.censorship.mask != new.censorship.mask
         || old.censorship.mask_host != new.censorship.mask_host
         || old.censorship.mask_port != new.censorship.mask_port

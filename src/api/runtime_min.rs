@@ -155,6 +155,25 @@ pub(super) struct RuntimeMeQualityRouteDropData {
 }
 
 #[derive(Serialize)]
+pub(super) struct RuntimeMeQualityFamilyStateData {
+    pub(super) family: &'static str,
+    pub(super) state: &'static str,
+    pub(super) state_since_epoch_secs: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) suppressed_until_epoch_secs: Option<u64>,
+    pub(super) fail_streak: u32,
+    pub(super) recover_success_streak: u32,
+}
+
+#[derive(Serialize)]
+pub(super) struct RuntimeMeQualityDrainGateData {
+    pub(super) route_quorum_ok: bool,
+    pub(super) redundancy_ok: bool,
+    pub(super) block_reason: &'static str,
+    pub(super) updated_at_epoch_secs: u64,
+}
+
+#[derive(Serialize)]
 pub(super) struct RuntimeMeQualityDcRttData {
     pub(super) dc: i16,
     pub(super) rtt_ema_ms: Option<f64>,
@@ -169,6 +188,8 @@ pub(super) struct RuntimeMeQualityPayload {
     pub(super) counters: RuntimeMeQualityCountersData,
     pub(super) teardown: RuntimeMeQualityTeardownData,
     pub(super) route_drops: RuntimeMeQualityRouteDropData,
+    pub(super) family_states: Vec<RuntimeMeQualityFamilyStateData>,
+    pub(super) drain_gate: RuntimeMeQualityDrainGateData,
     pub(super) dc_rtt: Vec<RuntimeMeQualityDcRttData>,
 }
 
@@ -410,6 +431,19 @@ pub(super) async fn build_runtime_me_quality_data(shared: &ApiShared) -> Runtime
     };
 
     let status = pool.api_status_snapshot().await;
+    let family_states = pool
+        .api_family_state_snapshot()
+        .into_iter()
+        .map(|entry| RuntimeMeQualityFamilyStateData {
+            family: entry.family,
+            state: entry.state,
+            state_since_epoch_secs: entry.state_since_epoch_secs,
+            suppressed_until_epoch_secs: entry.suppressed_until_epoch_secs,
+            fail_streak: entry.fail_streak,
+            recover_success_streak: entry.recover_success_streak,
+        })
+        .collect();
+    let drain_gate_snapshot = pool.api_drain_gate_snapshot();
     RuntimeMeQualityData {
         enabled: true,
         reason: None,
@@ -430,6 +464,13 @@ pub(super) async fn build_runtime_me_quality_data(shared: &ApiShared) -> Runtime
                 queue_full_total: shared.stats.get_me_route_drop_queue_full(),
                 queue_full_base_total: shared.stats.get_me_route_drop_queue_full_base(),
                 queue_full_high_total: shared.stats.get_me_route_drop_queue_full_high(),
+            },
+            family_states,
+            drain_gate: RuntimeMeQualityDrainGateData {
+                route_quorum_ok: drain_gate_snapshot.route_quorum_ok,
+                redundancy_ok: drain_gate_snapshot.redundancy_ok,
+                block_reason: drain_gate_snapshot.block_reason,
+                updated_at_epoch_secs: drain_gate_snapshot.updated_at_epoch_secs,
             },
             dc_rtt: status
                 .dcs

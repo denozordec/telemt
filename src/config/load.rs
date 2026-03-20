@@ -814,6 +814,9 @@ impl ProxyConfig {
             config.censorship.mask_host = Some(config.censorship.tls_domain.clone());
         }
 
+        // Normalize optional TLS fetch scope: whitespace-only values disable scoped routing.
+        config.censorship.tls_fetch_scope = config.censorship.tls_fetch_scope.trim().to_string();
+
         // Merge primary + extra TLS domains, deduplicate (primary always first).
         if !config.censorship.tls_domains.is_empty() {
             let mut all = Vec::with_capacity(1 + config.censorship.tls_domains.len());
@@ -2138,6 +2141,59 @@ mod tests {
         std::fs::write(&path, toml).unwrap();
         let cfg = ProxyConfig::load(&path).unwrap();
         assert_eq!(cfg.general.me_reinit_drain_timeout_secs, 90);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn tls_fetch_scope_default_is_empty() {
+        let toml = r#"
+            [censorship]
+            tls_domain = "example.com"
+
+            [access.users]
+            user = "00000000000000000000000000000000"
+        "#;
+        let dir = std::env::temp_dir();
+        let path = dir.join("telemt_tls_fetch_scope_default_test.toml");
+        std::fs::write(&path, toml).unwrap();
+        let cfg = ProxyConfig::load(&path).unwrap();
+        assert!(cfg.censorship.tls_fetch_scope.is_empty());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn tls_fetch_scope_is_trimmed_during_load() {
+        let toml = r#"
+            [censorship]
+            tls_domain = "example.com"
+            tls_fetch_scope = "  me  "
+
+            [access.users]
+            user = "00000000000000000000000000000000"
+        "#;
+        let dir = std::env::temp_dir();
+        let path = dir.join("telemt_tls_fetch_scope_trim_test.toml");
+        std::fs::write(&path, toml).unwrap();
+        let cfg = ProxyConfig::load(&path).unwrap();
+        assert_eq!(cfg.censorship.tls_fetch_scope, "me");
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn tls_fetch_scope_whitespace_becomes_empty() {
+        let toml = r#"
+            [censorship]
+            tls_domain = "example.com"
+            tls_fetch_scope = "   "
+
+            [access.users]
+            user = "00000000000000000000000000000000"
+        "#;
+        let dir = std::env::temp_dir();
+        let path = dir.join("telemt_tls_fetch_scope_blank_test.toml");
+        std::fs::write(&path, toml).unwrap();
+        let cfg = ProxyConfig::load(&path).unwrap();
+        assert!(cfg.censorship.tls_fetch_scope.is_empty());
         let _ = std::fs::remove_file(path);
     }
 

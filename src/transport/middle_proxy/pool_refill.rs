@@ -164,9 +164,10 @@ impl MePool {
     }
 
     async fn endpoints_for_dc(&self, target_dc: i32) -> Vec<SocketAddr> {
+        let now_epoch_secs = Self::now_epoch_secs();
         let mut endpoints = HashSet::<SocketAddr>::new();
 
-        if self.decision.ipv4_me {
+        if self.family_enabled_for_drain_coverage(IpFamily::V4, now_epoch_secs) {
             let map = self.proxy_map_v4.read().await;
             if let Some(addrs) = map.get(&target_dc) {
                 for (ip, port) in addrs {
@@ -175,7 +176,7 @@ impl MePool {
             }
         }
 
-        if self.decision.ipv6_me {
+        if self.family_enabled_for_drain_coverage(IpFamily::V6, now_epoch_secs) {
             let map = self.proxy_map_v6.read().await;
             if let Some(addrs) = map.get(&target_dc) {
                 for (ip, port) in addrs {

@@ -1326,6 +1326,11 @@ pub struct AntiCensorshipConfig {
     #[serde(default)]
     pub tls_domains: Vec<String>,
 
+    /// Upstream scope used for TLS front metadata fetches.
+    /// Empty value keeps default upstream routing behavior.
+    #[serde(default = "default_tls_fetch_scope")]
+    pub tls_fetch_scope: String,
+
     #[serde(default = "default_true")]
     pub mask: bool,
 
@@ -1383,6 +1388,7 @@ impl Default for AntiCensorshipConfig {
         Self {
             tls_domain: default_tls_domain(),
             tls_domains: Vec::new(),
+            tls_fetch_scope: default_tls_fetch_scope(),
             mask: default_true(),
             mask_host: None,
             mask_port: default_mask_port(),

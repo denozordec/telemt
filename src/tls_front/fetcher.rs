@@ -399,15 +399,17 @@ async fn connect_tcp_with_upstream(
     port: u16,
     connect_timeout: Duration,
     upstream: Option<std::sync::Arc<crate::transport::UpstreamManager>>,
+    scope: Option<&str>,
 ) -> Result<UpstreamStream> {
     if let Some(manager) = upstream {
         if let Some(addr) = resolve_socket_addr(host, port) {
-            match manager.connect(addr, None, None).await {
+            match manager.connect(addr, None, scope).await {
                 Ok(stream) => return Ok(stream),
                 Err(e) => {
                     warn!(
                         host = %host,
                         port = port,
+                        scope = ?scope,
                         error = %e,
                         "Upstream connect failed, using direct connect"
                     );
@@ -416,12 +418,13 @@ async fn connect_tcp_with_upstream(
         } else if let Ok(mut addrs) = tokio::net::lookup_host((host, port)).await
             && let Some(addr) = addrs.find(|a| a.is_ipv4())
         {
-            match manager.connect(addr, None, None).await {
+            match manager.connect(addr, None, scope).await {
                 Ok(stream) => return Ok(stream),
                 Err(e) => {
                     warn!(
                         host = %host,
                         port = port,
+                        scope = ?scope,
                         error = %e,
                         "Upstream connect failed, using direct connect"
                     );
@@ -542,6 +545,7 @@ async fn fetch_via_raw_tls(
     sni: &str,
     connect_timeout: Duration,
     upstream: Option<std::sync::Arc<crate::transport::UpstreamManager>>,
+    scope: Option<&str>,
     proxy_protocol: u8,
     unix_sock: Option<&str>,
 ) -> Result<TlsFetchResult> {
@@ -578,7 +582,7 @@ async fn fetch_via_raw_tls(
     #[cfg(not(unix))]
     let _ = unix_sock;
 
-    let stream = connect_tcp_with_upstream(host, port, connect_timeout, upstream).await?;
+    let stream = connect_tcp_with_upstream(host, port, connect_timeout, upstream, scope).await?;
     fetch_via_raw_tls_stream(stream, sni, connect_timeout, proxy_protocol).await
 }
 
@@ -682,6 +686,7 @@ async fn fetch_via_rustls(
     sni: &str,
     connect_timeout: Duration,
     upstream: Option<std::sync::Arc<crate::transport::UpstreamManager>>,
+    scope: Option<&str>,
     proxy_protocol: u8,
     unix_sock: Option<&str>,
 ) -> Result<TlsFetchResult> {
@@ -717,7 +722,7 @@ async fn fetch_via_rustls(
     #[cfg(not(unix))]
     let _ = unix_sock;
 
-    let stream = connect_tcp_with_upstream(host, port, connect_timeout, upstream).await?;
+    let stream = connect_tcp_with_upstream(host, port, connect_timeout, upstream, scope).await?;
     fetch_via_rustls_stream(stream, host, sni, proxy_protocol).await
 }
 
@@ -733,6 +738,7 @@ pub async fn fetch_real_tls(
     sni: &str,
     connect_timeout: Duration,
     upstream: Option<std::sync::Arc<crate::transport::UpstreamManager>>,
+    scope: Option<&str>,
     proxy_protocol: u8,
     unix_sock: Option<&str>,
 ) -> Result<TlsFetchResult> {
@@ -742,6 +748,7 @@ pub async fn fetch_real_tls(
         sni,
         connect_timeout,
         upstream.clone(),
+        scope,
         proxy_protocol,
         unix_sock,
     )
@@ -760,6 +767,7 @@ pub async fn fetch_real_tls(
         sni,
         connect_timeout,
         upstream,
+        scope,
         proxy_protocol,
         unix_sock,
     )

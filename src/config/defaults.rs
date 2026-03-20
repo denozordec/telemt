@@ -65,6 +65,10 @@ pub(crate) fn default_tls_domain() -> String {
     "petrovich.ru".to_string()
 }
 
+pub(crate) fn default_tls_fetch_scope() -> String {
+    String::new()
+}
+
 pub(crate) fn default_mask_port() -> u16 {
     443
 }
