@@ -1328,3 +1328,15 @@ mod beobachten_ttl_bounds_security_tests;
 #[cfg(test)]
 #[path = "tests/client_tls_record_wrap_hardening_security_tests.rs"]
 mod tls_record_wrap_hardening_security_tests;
+
+#[cfg(test)]
+#[path = "tests/client_clever_advanced_tests.rs"]
+mod client_clever_advanced_tests;
+
+#[cfg(test)]
+#[path = "tests/client_more_advanced_tests.rs"]
+mod client_more_advanced_tests;
+
+#[cfg(test)]
+#[path = "tests/client_deep_invariants_tests.rs"]
+mod client_deep_invariants_tests;

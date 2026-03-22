@@ -198,10 +198,13 @@ This document lists all configuration keys accepted by `config.toml`.
 | listen_tcp | `bool \| null` | `null` (auto) | — | Explicit TCP listener enable/disable override. |
 | proxy_protocol | `bool` | `false` | — | Enables HAProxy PROXY protocol parsing on incoming client connections. |
 | proxy_protocol_header_timeout_ms | `u64` | `500` | Must be `> 0`. | Timeout for PROXY protocol header read/parse (ms). |
+| proxy_protocol_trusted_cidrs | `IpNetwork[]` | `[]` | — | When non-empty, only connections from these proxy source CIDRs are allowed to provide PROXY protocol headers. If empty, PROXY headers are rejected by default (security hardening). |
 | metrics_port | `u16 \| null` | `null` | — | Metrics endpoint port (enables metrics listener). |
 | metrics_listen | `String \| null` | `null` | — | Full metrics bind address (`IP:PORT`), overrides `metrics_port`. |
 | metrics_whitelist | `IpNetwork[]` | `["127.0.0.1/32", "::1/128"]` | — | CIDR whitelist for metrics endpoint access. |
 | max_connections | `u32` | `10000` | — | Max concurrent client connections (`0` = unlimited). |
+
+Note: When `server.proxy_protocol` is enabled, incoming PROXY protocol headers are parsed from the first bytes of the connection and the client source address is replaced with `src_addr` from the header. For security, the peer source IP (the direct connection address) is verified against `server.proxy_protocol_trusted_cidrs`; if this list is empty, PROXY headers are rejected and the connection is considered untrusted. 
 
 ## [server.api]
 

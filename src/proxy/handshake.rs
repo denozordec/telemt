@@ -605,16 +605,6 @@ where
         }
     };
 
-    // Replay tracking is applied only after successful authentication to avoid
-    // letting unauthenticated probes evict valid entries from the replay cache.
-    let digest_half = &validation.digest[..tls::TLS_DIGEST_HALF_LEN];
-    if replay_checker.check_and_add_tls_digest(digest_half) {
-        auth_probe_record_failure(peer.ip(), Instant::now());
-        maybe_apply_server_hello_delay(config).await;
-        warn!(peer = %peer, "TLS replay attack detected (duplicate digest)");
-        return HandshakeResult::BadClient { reader, writer };
-    }
-
     let secret = match secrets.iter().find(|(name, _)| *name == validation.user) {
         Some((_, s)) => s,
         None => {
@@ -669,6 +659,16 @@ where
     } else {
         None
     };
+
+    // Replay tracking is applied only after full policy validation (including
+    // ALPN checks) so rejected handshakes cannot poison replay state.
+    let digest_half = &validation.digest[..tls::TLS_DIGEST_HALF_LEN];
+    if replay_checker.check_and_add_tls_digest(digest_half) {
+        auth_probe_record_failure(peer.ip(), Instant::now());
+        maybe_apply_server_hello_delay(config).await;
+        warn!(peer = %peer, "TLS replay attack detected (duplicate digest)");
+        return HandshakeResult::BadClient { reader, writer };
+    }
 
     let response = if let Some((cached_entry, use_full_cert_payload)) = cached {
         emulator::build_emulated_server_hello(
@@ -978,6 +978,22 @@ mod saturation_poison_security_tests;
 #[cfg(test)]
 #[path = "tests/handshake_auth_probe_hardening_adversarial_tests.rs"]
 mod auth_probe_hardening_adversarial_tests;
+
+#[cfg(test)]
+#[path = "tests/handshake_advanced_clever_tests.rs"]
+mod advanced_clever_tests;
+
+#[cfg(test)]
+#[path = "tests/handshake_more_clever_tests.rs"]
+mod more_clever_tests;
+
+#[cfg(test)]
+#[path = "tests/handshake_real_bug_stress_tests.rs"]
+mod real_bug_stress_tests;
+
+#[cfg(test)]
+#[path = "tests/handshake_timing_manual_bench_tests.rs"]
+mod timing_manual_bench_tests;
 
 /// Compile-time guard: HandshakeSuccess holds cryptographic key material and
 /// must never be Copy.  A Copy impl would allow silent key duplication,
