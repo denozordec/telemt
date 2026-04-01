@@ -572,7 +572,7 @@ pub fn build_server_hello(
     secret: &[u8],
     client_digest: &[u8; TLS_DIGEST_LEN],
     session_id: &[u8],
-    fake_cert_len: usize,
+    _fake_cert_len: usize,
     rng: &SecureRandom,
     alpn: Option<Vec<u8>>,
     new_session_tickets: u8,
@@ -620,7 +620,7 @@ pub fn build_server_hello(
 
     // Embed optional ALPN negotiation marker in the first record
     // (EncryptedExtensions), then pad the rest with random bytes.
-    let mut build_app_data_record = |data_len: usize, embed_alpn: bool| -> Vec<u8> {
+    let build_app_data_record = |data_len: usize, embed_alpn: bool| -> Vec<u8> {
         let mut payload = Vec::with_capacity(data_len);
         if embed_alpn {
             if let Some(proto) = alpn
