@@ -100,6 +100,10 @@ mod extension_type {
     pub const KEY_SHARE: u16 = 0x0033;
     pub const SUPPORTED_VERSIONS: u16 = 0x002b;
     pub const ALPN: u16 = 0x0010;
+    pub const EXTENDED_MASTER_SECRET: u16 = 0x0017;
+    pub const SESSION_TICKET: u16 = 0x0023;
+    pub const EC_POINT_FORMATS: u16 = 0x000b;
+    pub const RENEGOTIATION_INFO: u16 = 0xff01;
 }
 
 /// TLS Cipher Suites
@@ -138,46 +142,69 @@ struct TlsExtensionBuilder {
 impl TlsExtensionBuilder {
     fn new() -> Self {
         Self {
-            extensions: Vec::with_capacity(128),
+            extensions: Vec::with_capacity(256),
         }
     }
 
     /// Add Key Share extension with X25519 key
     fn add_key_share(&mut self, public_key: &[u8; 32]) -> &mut Self {
-        // Extension type: key_share (0x0033)
         self.extensions
             .extend_from_slice(&extension_type::KEY_SHARE.to_be_bytes());
-
-        // Key share entry: curve (2) + key_len (2) + key (32) = 36 bytes
-        // Extension data length
-        let entry_len: u16 = 2 + 2 + 32; // curve + length + key
+        let entry_len: u16 = 2 + 2 + 32;
         self.extensions.extend_from_slice(&entry_len.to_be_bytes());
-
-        // Named curve: x25519
         self.extensions
             .extend_from_slice(&named_curve::X25519.to_be_bytes());
-
-        // Key length
         self.extensions.extend_from_slice(&(32u16).to_be_bytes());
-
-        // Key data
         self.extensions.extend_from_slice(public_key);
-
         self
     }
 
     /// Add Supported Versions extension
     fn add_supported_versions(&mut self, version: u16) -> &mut Self {
-        // Extension type: supported_versions (0x002b)
         self.extensions
             .extend_from_slice(&extension_type::SUPPORTED_VERSIONS.to_be_bytes());
-
-        // Extension data: length (2) + version (2)
         self.extensions.extend_from_slice(&(2u16).to_be_bytes());
-
-        // Selected version
         self.extensions.extend_from_slice(&version.to_be_bytes());
+        self
+    }
 
+    /// Add extended_master_secret extension (0x0017) — zero-length data, presence-only
+    fn add_extended_master_secret(&mut self) -> &mut Self {
+        self.extensions
+            .extend_from_slice(&extension_type::EXTENDED_MASTER_SECRET.to_be_bytes());
+        self.extensions.extend_from_slice(&(0u16).to_be_bytes());
+        self
+    }
+
+    /// Add session_ticket extension (0x0023) — empty, mirrors client offer
+    fn add_session_ticket(&mut self) -> &mut Self {
+        self.extensions
+            .extend_from_slice(&extension_type::SESSION_TICKET.to_be_bytes());
+        self.extensions.extend_from_slice(&(0u16).to_be_bytes());
+        self
+    }
+
+    /// Add ec_point_formats extension (0x000b) — uncompressed only
+    fn add_ec_point_formats(&mut self) -> &mut Self {
+        // Extension type
+        self.extensions
+            .extend_from_slice(&extension_type::EC_POINT_FORMATS.to_be_bytes());
+        // Extension data length: 1 (list len) + 1 (format)
+        self.extensions.extend_from_slice(&(2u16).to_be_bytes());
+        // ec_point_formats list length
+        self.extensions.push(0x01);
+        // uncompressed (0x00)
+        self.extensions.push(0x00);
+        self
+    }
+
+    /// Add renegotiation_info extension (0xff01) — empty RI (initial handshake)
+    fn add_renegotiation_info(&mut self) -> &mut Self {
+        self.extensions
+            .extend_from_slice(&extension_type::RENEGOTIATION_INFO.to_be_bytes());
+        // Extension data: 1 byte length + 0 bytes RI value
+        self.extensions.extend_from_slice(&(1u16).to_be_bytes());
+        self.extensions.push(0x00);
         self
     }
 
@@ -187,13 +214,8 @@ impl TlsExtensionBuilder {
             return Vec::new();
         };
         let mut result = Vec::with_capacity(2 + self.extensions.len());
-
-        // Extensions length (2 bytes)
         result.extend_from_slice(&len.to_be_bytes());
-
-        // Extensions data
         result.extend_from_slice(&self.extensions);
-
         result
     }
 
@@ -236,8 +258,25 @@ impl ServerHelloBuilder {
     }
 
     fn with_tls13_version(mut self) -> Self {
-        // TLS 1.3 = 0x0304
         self.extensions.add_supported_versions(0x0304);
+        self
+    }
+
+    /// Add Chrome-compatible compat extensions based on what the client offered.
+    ///
+    /// These extensions make the ServerHello indistinguishable from a real
+    /// browser TLS 1.3 handshake at the DPI level:
+    /// - extended_master_secret is always included (ubiquitous in Chrome/Firefox)
+    /// - renegotiation_info is always included (TLS 1.2 compat signal)
+    /// - ec_point_formats is always included
+    /// - session_ticket is mirrored only when the client offered it
+    fn with_compat_extensions(mut self, client_has_session_ticket: bool) -> Self {
+        self.extensions.add_extended_master_secret();
+        self.extensions.add_renegotiation_info();
+        self.extensions.add_ec_point_formats();
+        if client_has_session_ticket {
+            self.extensions.add_session_ticket();
+        }
         self
     }
 
@@ -251,49 +290,36 @@ impl ServerHelloBuilder {
             return Vec::new();
         };
 
-        // Calculate total length
-        let body_len = 2 + // version
-                       32 + // random
-                       1 + self.session_id.len() + // session_id length + data
-                       2 + // cipher suite
-                       1 + // compression
-                       2 + extensions.len(); // extensions length + data
+        let body_len = 2 +
+                       32 +
+                       1 + self.session_id.len() +
+                       2 +
+                       1 +
+                       2 + extensions.len();
         if body_len > 0x00ff_ffff {
             return Vec::new();
         }
 
         let mut message = Vec::with_capacity(4 + body_len);
 
-        // Handshake header
-        message.push(0x02); // ServerHello message type
+        message.push(0x02);
 
-        // 3-byte length
         let Ok(body_len_u32) = u32::try_from(body_len) else {
             return Vec::new();
         };
         let len_bytes = body_len_u32.to_be_bytes();
         message.extend_from_slice(&len_bytes[1..4]);
 
-        // Server version (TLS 1.2 in header, actual version in extension)
         message.extend_from_slice(&TLS_VERSION);
-
-        // Random (32 bytes) - placeholder, will be replaced with digest
         message.extend_from_slice(&self.random);
 
-        // Session ID
         message.push(session_id_len);
         message.extend_from_slice(&self.session_id);
 
-        // Cipher suite
         message.extend_from_slice(&self.cipher_suite);
-
-        // Compression method
         message.push(self.compression);
 
-        // Extensions length
         message.extend_from_slice(&extensions_len.to_be_bytes());
-
-        // Extensions data
         message.extend_from_slice(&extensions);
 
         message
@@ -310,17 +336,74 @@ impl ServerHelloBuilder {
         };
 
         let mut record = Vec::with_capacity(5 + message.len());
-
-        // TLS record header
         record.push(TLS_RECORD_HANDSHAKE);
         record.extend_from_slice(&TLS_VERSION);
         record.extend_from_slice(&message_len.to_be_bytes());
-
-        // Message
         record.extend_from_slice(&message);
-
         record
     }
+}
+
+// ============= ClientHello helpers =============
+
+/// Check whether a specific extension type is present in a ClientHello.
+///
+/// Used to mirror optional extensions (e.g. session_ticket) back to the
+/// client only when they were originally offered, avoiding a mismatch that
+/// a passive observer could use as a fingerprint.
+pub fn has_extension_in_client_hello(handshake: &[u8], target_type: u16) -> bool {
+    if handshake.len() < 5 || handshake[0] != TLS_RECORD_HANDSHAKE {
+        return false;
+    }
+    let record_len = u16::from_be_bytes([handshake[3], handshake[4]]) as usize;
+    if handshake.len() < 5 + record_len {
+        return false;
+    }
+
+    let mut pos = 5;
+    if handshake.get(pos) != Some(&0x01) {
+        return false;
+    }
+    pos += 4; // type + 3-byte len
+    pos += 2 + 32; // legacy version + random
+    if pos >= handshake.len() {
+        return false;
+    }
+    let session_id_len = handshake[pos] as usize;
+    pos += 1 + session_id_len;
+    if pos + 2 > handshake.len() {
+        return false;
+    }
+    let cipher_len = u16::from_be_bytes([handshake[pos], handshake[pos + 1]]) as usize;
+    pos += 2 + cipher_len;
+    if pos >= handshake.len() {
+        return false;
+    }
+    let comp_len = handshake[pos] as usize;
+    pos += 1 + comp_len;
+    if pos + 2 > handshake.len() {
+        return false;
+    }
+    let ext_len = u16::from_be_bytes([handshake[pos], handshake[pos + 1]]) as usize;
+    pos += 2;
+    let ext_end = pos + ext_len;
+    if ext_end > handshake.len() {
+        return false;
+    }
+
+    while pos + 4 <= ext_end {
+        let etype = u16::from_be_bytes([handshake[pos], handshake[pos + 1]]);
+        let elen = u16::from_be_bytes([handshake[pos + 2], handshake[pos + 3]]) as usize;
+        pos += 4;
+        if pos + elen > ext_end {
+            break;
+        }
+        if etype == target_type {
+            return true;
+        }
+        pos += elen;
+    }
+    false
 }
 
 // ============= Public Functions =============
@@ -355,9 +438,6 @@ pub fn validate_tls_handshake_with_replay_window(
     ignore_time_skew: bool,
     replay_window_secs: u64,
 ) -> Option<TlsValidation> {
-    // Only pay the clock syscall when we will actually compare against it.
-    // If `ignore_time_skew` is set, a broken or unavailable system clock
-    // must not block legitimate clients — that would be a DoS via clock failure.
     let now = if !ignore_time_skew {
         system_time_to_unix_secs(SystemTime::now())?
     } else {
@@ -365,9 +445,6 @@ pub fn validate_tls_handshake_with_replay_window(
     };
 
     let replay_window_u32 = u32::try_from(replay_window_secs).unwrap_or(u32::MAX);
-    // Boot-time bypass and ignore_time_skew serve different compatibility paths.
-    // When skew checks are disabled, force boot-time cap to zero to prevent
-    // accidental future coupling of boot-time logic into the ignore-skew path.
     let boot_time_cap_secs = if ignore_time_skew {
         0
     } else {
@@ -386,9 +463,6 @@ pub fn validate_tls_handshake_with_replay_window(
 }
 
 fn system_time_to_unix_secs(now: SystemTime) -> Option<i64> {
-    // `try_from` rejects values that overflow i64 (> ~292 billion years CE),
-    // whereas `as i64` would silently wrap to a negative timestamp and corrupt
-    // every subsequent time-skew comparison.
     let d = now.duration_since(UNIX_EPOCH).ok()?;
     i64::try_from(d.as_secs()).ok()
 }
@@ -419,12 +493,10 @@ fn validate_tls_handshake_at_time_with_boot_cap(
         return None;
     }
 
-    // Extract digest
     let digest: [u8; TLS_DIGEST_LEN] = handshake[TLS_DIGEST_POS..TLS_DIGEST_POS + TLS_DIGEST_LEN]
         .try_into()
         .ok()?;
 
-    // Extract session ID
     let session_id_len_pos = TLS_DIGEST_POS + TLS_DIGEST_LEN;
     let session_id_len = handshake.get(session_id_len_pos).copied()? as usize;
     if session_id_len > 32 {
@@ -438,7 +510,6 @@ fn validate_tls_handshake_at_time_with_boot_cap(
 
     let session_id = handshake[session_id_start..session_id_start + session_id_len].to_vec();
 
-    // Build message for HMAC (with zeroed digest)
     let mut msg = handshake.to_vec();
     msg[TLS_DIGEST_POS..TLS_DIGEST_POS + TLS_DIGEST_LEN].fill(0);
 
@@ -447,17 +518,10 @@ fn validate_tls_handshake_at_time_with_boot_cap(
     for (user, secret) in secrets {
         let computed = sha256_hmac(secret, &msg);
 
-        // Constant-time equality check on the 28-byte HMAC window.
-        // A variable-time short-circuit here lets an active censor measure how many
-        // bytes matched, enabling secret brute-force via timing side-channels.
-        // Direct comparison on the original arrays avoids a heap allocation and
-        // removes the `try_into().unwrap()` that the intermediate Vec would require.
         if !bool::from(digest[..28].ct_eq(&computed[..28])) {
             continue;
         }
 
-        // The last 4 bytes encode the timestamp as XOR(digest[28..32], computed[28..32]).
-        // Inline array construction is infallible: both slices are [u8; 32] by construction.
         let timestamp = u32::from_le_bytes([
             digest[28] ^ computed[28],
             digest[29] ^ computed[29],
@@ -465,13 +529,7 @@ fn validate_tls_handshake_at_time_with_boot_cap(
             digest[31] ^ computed[31],
         ]);
 
-        // time_diff is only meaningful (and `now` is only valid) when we are
-        // actually checking the window.  Keep both inside the guard to make
-        // the dead-code path explicit and prevent accidental future use of
-        // a sentinel `now` value outside its intended scope.
         if !ignore_time_skew {
-            // Allow very small timestamps (boot time instead of unix time)
-            // This is a quirk in some clients that use uptime instead of real time
             let is_boot_time = boot_time_cap_secs > 0 && timestamp < boot_time_cap_secs;
             if !is_boot_time {
                 let time_diff = now - i64::from(timestamp);
@@ -507,11 +565,14 @@ pub fn gen_fake_x25519_key(rng: &SecureRandom) -> [u8; 32] {
 /// Build TLS ServerHello response
 ///
 /// This builds a complete TLS 1.3-like response including:
-/// - ServerHello record with extensions
+/// - ServerHello record with browser-compatible extensions
 /// - Change Cipher Spec record
-/// - Fake encrypted certificate (Application Data record)
+/// - Three ApplicationData records mimicking the real TLS 1.3 encrypted
+///   handshake flight: EncryptedExtensions + Certificate + Finish
 ///
-/// The response includes an HMAC digest that the client can verify.
+/// When `client_hello` is provided, optional extensions (e.g. session_ticket)
+/// are mirrored only if the client originally offered them, preventing an
+/// extension-presence fingerprint distinguishable by DPI.
 pub fn build_server_hello(
     secret: &[u8],
     client_digest: &[u8; TLS_DIGEST_LEN],
@@ -520,16 +581,23 @@ pub fn build_server_hello(
     rng: &SecureRandom,
     alpn: Option<Vec<u8>>,
     new_session_tickets: u8,
+    client_hello: Option<&[u8]>,
 ) -> Vec<u8> {
     const MIN_APP_DATA: usize = 64;
     const MAX_APP_DATA: usize = MAX_TLS_CIPHERTEXT_SIZE;
-    let fake_cert_len = fake_cert_len.clamp(MIN_APP_DATA, MAX_APP_DATA);
+
+    // Determine which optional extensions to mirror from the ClientHello.
+    let client_has_session_ticket = client_hello
+        .map(|ch| has_extension_in_client_hello(ch, extension_type::SESSION_TICKET))
+        .unwrap_or(false);
+
     let x25519_key = gen_fake_x25519_key(rng);
 
-    // Build ServerHello
+    // Build ServerHello with browser-compatible extension set.
     let server_hello = ServerHelloBuilder::new(session_id.to_vec())
         .with_x25519_key(&x25519_key)
         .with_tls13_version()
+        .with_compat_extensions(client_has_session_ticket)
         .build_record();
 
     // Build Change Cipher Spec record
@@ -538,49 +606,68 @@ pub fn build_server_hello(
         TLS_VERSION[0],
         TLS_VERSION[1],
         0x00,
-        0x01, // length = 1
-        0x01, // CCS byte
+        0x01,
+        0x01,
     ];
 
-    // Build first encrypted flight mimic as opaque ApplicationData bytes.
-    // Embed a compact EncryptedExtensions-like ALPN block when selected.
-    let mut fake_cert = Vec::with_capacity(fake_cert_len);
-    if let Some(proto) = alpn
-        .as_ref()
-        .filter(|p| !p.is_empty() && p.len() <= u8::MAX as usize)
-    {
-        let proto_list_len = 1usize + proto.len();
-        let ext_data_len = 2usize + proto_list_len;
-        let marker_len = 4usize + ext_data_len;
-        if marker_len <= fake_cert_len {
-            fake_cert.extend_from_slice(&0x0010u16.to_be_bytes());
-            fake_cert.extend_from_slice(&(ext_data_len as u16).to_be_bytes());
-            fake_cert.extend_from_slice(&(proto_list_len as u16).to_be_bytes());
-            fake_cert.push(proto.len() as u8);
-            fake_cert.extend_from_slice(proto);
+    // Build three separate ApplicationData records that mimic the real
+    // TLS 1.3 encrypted handshake flight structure:
+    //   1. EncryptedExtensions  (50–80 bytes)
+    //   2. Certificate          (1200–2000 bytes)
+    //   3. CertificateVerify + Finished (100–150 bytes)
+    //
+    // A single monolithic random blob is trivially distinguishable by DPI
+    // via record-count and size-distribution heuristics. Three records with
+    // plausible size ranges are consistent with any modern TLS 1.3 server.
+    let enc_ext_len = (rng.range(31) + 50).clamp(MIN_APP_DATA, MAX_APP_DATA);
+    let cert_len = (rng.range(801) + 1200).clamp(MIN_APP_DATA, MAX_APP_DATA);
+    let finish_len = (rng.range(51) + 100).clamp(MIN_APP_DATA, MAX_APP_DATA);
+
+    // Embed optional ALPN negotiation marker in the first record
+    // (EncryptedExtensions), then pad the rest with random bytes.
+    let mut build_app_data_record = |data_len: usize, embed_alpn: bool| -> Vec<u8> {
+        let mut payload = Vec::with_capacity(data_len);
+        if embed_alpn {
+            if let Some(proto) = alpn
+                .as_ref()
+                .filter(|p| !p.is_empty() && p.len() <= u8::MAX as usize)
+            {
+                let proto_list_len = 1usize + proto.len();
+                let ext_data_len = 2usize + proto_list_len;
+                let marker_len = 4usize + ext_data_len;
+                if marker_len <= data_len {
+                    payload.extend_from_slice(&0x0010u16.to_be_bytes());
+                    payload.extend_from_slice(&(ext_data_len as u16).to_be_bytes());
+                    payload.extend_from_slice(&(proto_list_len as u16).to_be_bytes());
+                    payload.push(proto.len() as u8);
+                    payload.extend_from_slice(proto);
+                }
+            }
         }
-    }
-    if fake_cert.len() < fake_cert_len {
-        fake_cert.extend_from_slice(&rng.bytes(fake_cert_len - fake_cert.len()));
-    } else if fake_cert.len() > fake_cert_len {
-        fake_cert.truncate(fake_cert_len);
-    }
+        let remaining = data_len.saturating_sub(payload.len());
+        if remaining > 0 {
+            payload.extend_from_slice(&rng.bytes(remaining));
+        }
+        payload.truncate(data_len);
 
-    let mut app_data_record = Vec::with_capacity(5 + fake_cert_len);
-    app_data_record.push(TLS_RECORD_APPLICATION);
-    app_data_record.extend_from_slice(&TLS_VERSION);
-    app_data_record.extend_from_slice(&(fake_cert_len as u16).to_be_bytes());
-    // Fill ApplicationData with fully random bytes of desired length to avoid
-    // deterministic DPI fingerprints (fixed inner content type markers).
-    app_data_record.extend_from_slice(&fake_cert);
+        let mut record = Vec::with_capacity(5 + data_len);
+        record.push(TLS_RECORD_APPLICATION);
+        record.extend_from_slice(&TLS_VERSION);
+        record.extend_from_slice(&(data_len as u16).to_be_bytes());
+        record.extend_from_slice(&payload);
+        record
+    };
 
-    // Build optional NewSessionTicket records (TLS 1.3 handshake messages are encrypted;
-    // here we mimic with opaque ApplicationData records of plausible size).
+    let enc_ext_record = build_app_data_record(enc_ext_len, true);
+    let cert_record = build_app_data_record(cert_len, false);
+    let finish_record = build_app_data_record(finish_len, false);
+
+    // Build optional NewSessionTicket records
     let mut tickets = Vec::new();
     let ticket_count = new_session_tickets.min(4);
     if ticket_count > 0 {
         for _ in 0..ticket_count {
-            let ticket_len: usize = rng.range(48) + 48; // 48-95 bytes
+            let ticket_len: usize = rng.range(48) + 48;
             let mut record = Vec::with_capacity(5 + ticket_len);
             record.push(TLS_RECORD_APPLICATION);
             record.extend_from_slice(&TLS_VERSION);
@@ -594,12 +681,16 @@ pub fn build_server_hello(
     let mut response = Vec::with_capacity(
         server_hello.len()
             + change_cipher_spec.len()
-            + app_data_record.len()
+            + enc_ext_record.len()
+            + cert_record.len()
+            + finish_record.len()
             + tickets.iter().map(|r| r.len()).sum::<usize>(),
     );
     response.extend_from_slice(&server_hello);
     response.extend_from_slice(&change_cipher_spec);
-    response.extend_from_slice(&app_data_record);
+    response.extend_from_slice(&enc_ext_record);
+    response.extend_from_slice(&cert_record);
+    response.extend_from_slice(&finish_record);
     for t in &tickets {
         response.extend_from_slice(t);
     }
@@ -611,7 +702,6 @@ pub fn build_server_hello(
     let response_digest = sha256_hmac(secret, &hmac_input);
 
     // Insert computed digest into ServerHello
-    // Position: record header (5) + message type (1) + length (3) + version (2) = 11
     response[TLS_DIGEST_POS..TLS_DIGEST_POS + TLS_DIGEST_LEN].copy_from_slice(&response_digest);
 
     response
@@ -628,15 +718,12 @@ pub fn extract_sni_from_client_hello(handshake: &[u8]) -> Option<String> {
         return None;
     }
 
-    let mut pos = 5; // after record header
+    let mut pos = 5;
     if handshake.get(pos).copied()? != 0x01 {
-        return None; // not ClientHello
+        return None;
     }
 
-    // Handshake length bytes
-    pos += 4; // type + len (3)
-
-    // version (2) + random (32)
+    pos += 4;
     pos += 2 + 32;
     if pos + 1 > handshake.len() {
         return None;
@@ -684,7 +771,6 @@ pub fn extract_sni_from_client_hello(handshake: &[u8]) -> Option<String> {
             saw_sni_extension = true;
         }
         if etype == 0x0000 && elen >= 5 {
-            // server_name extension
             let list_len = u16::from_be_bytes([handshake[pos], handshake[pos + 1]]) as usize;
             let mut sn_pos = pos + 2;
             let sn_end = std::cmp::min(sn_pos + list_len, pos + elen);
@@ -753,12 +839,12 @@ pub fn extract_alpn_from_client_hello(handshake: &[u8]) -> Vec<Vec<u8>> {
         return Vec::new();
     }
 
-    let mut pos = 5; // after record header
+    let mut pos = 5;
     if handshake.get(pos) != Some(&0x01) {
         return Vec::new();
     }
-    pos += 4; // type + len
-    pos += 2 + 32; // version + random
+    pos += 4;
+    pos += 2 + 32;
     if pos >= handshake.len() {
         return Vec::new();
     }
@@ -816,8 +902,6 @@ pub fn is_tls_handshake(first_bytes: &[u8]) -> bool {
     if first_bytes.len() < 3 {
         return false;
     }
-
-    // TLS ClientHello commonly uses legacy record versions 0x0301 or 0x0303.
     first_bytes[0] == TLS_RECORD_HANDSHAKE
         && first_bytes[1] == 0x03
         && (first_bytes[2] == 0x01 || first_bytes[2] == 0x03)
@@ -828,7 +912,6 @@ pub fn parse_tls_record_header(header: &[u8; 5]) -> Option<(u8, u16)> {
     let record_type = header[0];
     let version = [header[1], header[2]];
 
-    // We accept both TLS 1.0 header (for ClientHello) and TLS 1.2/1.3
     if version != [0x03, 0x01] && version != TLS_VERSION {
         return None;
     }
@@ -849,7 +932,6 @@ fn validate_server_hello_structure(data: &[u8]) -> Result<(), ProxyError> {
         });
     }
 
-    // Check record header
     if data[0] != TLS_RECORD_HANDSHAKE {
         return Err(ProxyError::InvalidTlsRecord {
             record_type: data[0],
@@ -857,7 +939,6 @@ fn validate_server_hello_structure(data: &[u8]) -> Result<(), ProxyError> {
         });
     }
 
-    // Check version
     if data[1..3] != TLS_VERSION {
         return Err(ProxyError::InvalidTlsRecord {
             record_type: data[0],
@@ -865,7 +946,6 @@ fn validate_server_hello_structure(data: &[u8]) -> Result<(), ProxyError> {
         });
     }
 
-    // Check record length
     let record_len = u16::from_be_bytes([data[3], data[4]]) as usize;
     if data.len() < 5 + record_len {
         return Err(ProxyError::InvalidHandshake(format!(
@@ -875,7 +955,6 @@ fn validate_server_hello_structure(data: &[u8]) -> Result<(), ProxyError> {
         )));
     }
 
-    // Check message type
     if data[5] != 0x02 {
         return Err(ProxyError::InvalidHandshake(format!(
             "Expected ServerHello (0x02), got 0x{:02x}",
@@ -883,7 +962,6 @@ fn validate_server_hello_structure(data: &[u8]) -> Result<(), ProxyError> {
         )));
     }
 
-    // Parse message length
     let msg_len = u32::from_be_bytes([0, data[6], data[7], data[8]]) as usize;
     if msg_len + 4 != record_len {
         return Err(ProxyError::InvalidHandshake(format!(
@@ -897,22 +975,12 @@ fn validate_server_hello_structure(data: &[u8]) -> Result<(), ProxyError> {
 
 // ============= Compile-time Security Invariants =============
 
-/// Compile-time checks that enforce invariants the rest of the code relies on.
-/// Using `static_assertions` ensures these can never silently break across
-/// refactors without a compile error.
 mod compile_time_security_checks {
     use super::{TLS_DIGEST_HALF_LEN, TLS_DIGEST_LEN};
     use static_assertions::const_assert;
 
-    // The digest must be exactly one SHA-256 output.
     const_assert!(TLS_DIGEST_LEN == 32);
-
-    // Replay-dedup stores the first half; verify it is literally half.
     const_assert!(TLS_DIGEST_HALF_LEN * 2 == TLS_DIGEST_LEN);
-
-    // The HMAC check window (28 bytes) plus the embedded timestamp (4 bytes)
-    // must exactly fill the digest.  If TLS_DIGEST_LEN ever changes, these
-    // assertions will catch the mismatch before any timing-oracle fix is broke.
     const_assert!(28 + 4 == TLS_DIGEST_LEN);
 }
 
