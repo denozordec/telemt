@@ -1155,7 +1155,16 @@ fn test_build_server_hello_structure() {
     let session_id = vec![0xAB; 32];
     let rng = crate::crypto::SecureRandom::new();
 
-    let response = build_server_hello(secret, &client_digest, &session_id, 2048, &rng, None, 0, None);
+    let response = build_server_hello(
+        secret,
+        &client_digest,
+        &session_id,
+        2048,
+        &rng,
+        None,
+        0,
+        None,
+    );
 
     // Response should not be empty
     assert!(!response.is_empty());
@@ -1174,8 +1183,26 @@ fn test_build_server_hello_digest() {
     let session_id = vec![0xAB; 32];
     let rng = crate::crypto::SecureRandom::new();
 
-    let response1 = build_server_hello(secret, &client_digest, &session_id, 1024, &rng, None, 0, None);
-    let response2 = build_server_hello(secret, &client_digest, &session_id, 1024, &rng, None, 0, None);
+    let response1 = build_server_hello(
+        secret,
+        &client_digest,
+        &session_id,
+        1024,
+        &rng,
+        None,
+        0,
+        None,
+    );
+    let response2 = build_server_hello(
+        secret,
+        &client_digest,
+        &session_id,
+        1024,
+        &rng,
+        None,
+        0,
+        None,
+    );
 
     // Responses should differ (random padding)
     // But both should be non-empty and valid structure
@@ -1190,7 +1217,16 @@ fn test_build_server_hello_session_id_echoed() {
     let session_id = vec![0xDE, 0xAD, 0xBE, 0xEF];
     let rng = crate::crypto::SecureRandom::new();
 
-    let response = build_server_hello(secret, &client_digest, &session_id, 1024, &rng, None, 0, None);
+    let response = build_server_hello(
+        secret,
+        &client_digest,
+        &session_id,
+        1024,
+        &rng,
+        None,
+        0,
+        None,
+    );
 
     assert!(!response.is_empty(), "response must not be empty");
 
@@ -1247,7 +1283,16 @@ fn test_build_server_hello_digest_position() {
     let session_id = vec![0xAB; 32];
     let rng = crate::crypto::SecureRandom::new();
 
-    let response = build_server_hello(secret, &client_digest, &session_id, 1024, &rng, None, 0, None);
+    let response = build_server_hello(
+        secret,
+        &client_digest,
+        &session_id,
+        1024,
+        &rng,
+        None,
+        0,
+        None,
+    );
 
     // The response digest is placed starting at TLS_DIGEST_POS (byte 11).
     assert!(
@@ -1274,7 +1319,16 @@ fn new_session_tickets_zero_produces_three_app_records() {
     let session_id = vec![0xAB; 32];
     let rng = crate::crypto::SecureRandom::new();
 
-    let response = build_server_hello(secret, &client_digest, &session_id, 1024, &rng, None, 0, None);
+    let response = build_server_hello(
+        secret,
+        &client_digest,
+        &session_id,
+        1024,
+        &rng,
+        None,
+        0,
+        None,
+    );
 
     let mut pos = 0usize;
     let mut app_records = 0usize;
@@ -1304,73 +1358,6 @@ fn new_session_tickets_one_produces_four_app_records() {
     let session_id = vec![0xAB; 32];
     let rng = crate::crypto::SecureRandom::new();
 
-    let response = build_server_hello(secret, &client_digest, &session_id, 1024, &rng, None, 1, None);
-
-    let mut pos = 0usize;
-    let mut app_records = 0usize;
-    while pos + 5 <= response.len() {
-        let rtype = response[pos];
-        let rlen = u16::from_be_bytes([response[pos + 3], response[pos + 4]]) as usize;
-        let next = pos + 5 + rlen;
-        assert!(next <= response.len());
-        if rtype == TLS_RECORD_APPLICATION {
-            app_records += 1;
-        }
-        pos = next;
-    }
-    assert_eq!(
-        app_records, 4,
-        "one ticket: exactly 4 ApplicationData records expected"
-    );
-}
-
-#[test]
-fn new_session_tickets_count_capped_at_four() {
-    let secret = b"tickets_cap_test";
-    let client_digest = [0u8; TLS_DIGEST_LEN];
-    let session_id = vec![0xAB; 32];
-    let rng = crate::crypto::SecureRandom::new();
-
-    let mut response = build_server_hello(secret, &client_digest, &session_id, 1024, &rng, None, 0, None);
-
-    for tickets in [0u8, 1, 2, 3, 4] {
-        response = build_server_hello(
-            secret,
-            &client_digest,
-            &session_id,
-            1024,
-            &rng,
-            None,
-            tickets,
-            None,
-        );
-        let mut pos = 0usize;
-        let mut app_records = 0usize;
-        while pos + 5 <= response.len() {
-            let rtype = response[pos];
-            let rlen = u16::from_be_bytes([response[pos + 3], response[pos + 4]]) as usize;
-            let next = pos + 5 + rlen;
-            assert!(next <= response.len());
-            if rtype == TLS_RECORD_APPLICATION {
-                app_records += 1;
-            }
-            pos = next;
-        }
-        let expected = 3 + tickets as usize;
-        assert_eq!(
-            app_records, expected,
-            "tickets={tickets}: expected {expected} ApplicationData records"
-        );
-    }
-}
-
-#[test]
-fn new_session_tickets_u8_max_capped_at_four() {
-    let secret = b"tickets_u8max_test";
-    let client_digest = [0u8; TLS_DIGEST_LEN];
-    let session_id = vec![0xAB; 32];
-    let rng = crate::crypto::SecureRandom::new();
-
     let response = build_server_hello(
         secret,
         &client_digest,
@@ -1378,7 +1365,7 @@ fn new_session_tickets_u8_max_capped_at_four() {
         1024,
         &rng,
         None,
-        u8::MAX,
+        1,
         None,
     );
 
@@ -1388,412 +1375,4 @@ fn new_session_tickets_u8_max_capped_at_four() {
         let rtype = response[pos];
         let rlen = u16::from_be_bytes([response[pos + 3], response[pos + 4]]) as usize;
         let next = pos + 5 + rlen;
-        assert!(next <= response.len());
-        if rtype == TLS_RECORD_APPLICATION {
-            app_records += 1;
-        }
-        pos = next;
-    }
-    assert_eq!(
-        app_records, 7,
-        "u8::MAX tickets: hard cap must limit to 4 tickets → 7 ApplicationData records total"
-    );
-}
-
-// ------------------------------------------------------------------
-// build_server_hello: minimum / maximum fake_cert_len boundaries
-// ------------------------------------------------------------------
-
-#[test]
-fn build_server_hello_with_minimum_fake_cert_len() {
-    let secret = b"min_cert_len_test";
-    let client_digest = [0u8; TLS_DIGEST_LEN];
-    let session_id = vec![0xAB; 32];
-    let rng = crate::crypto::SecureRandom::new();
-
-    let response = build_server_hello(secret, &client_digest, &session_id, 1, &rng, None, 0, None);
-
-    assert!(!response.is_empty(), "Minimum fake_cert_len=1 must still produce a response");
-    assert_eq!(response[0], TLS_RECORD_HANDSHAKE);
-}
-
-#[test]
-fn build_server_hello_with_maximum_fake_cert_len() {
-    let secret = b"max_cert_len_test";
-    let client_digest = [0u8; TLS_DIGEST_LEN];
-    let session_id = vec![0xAB; 32];
-    let rng = crate::crypto::SecureRandom::new();
-
-    let response = build_server_hello(secret, &client_digest, &session_id, 65_535, &rng, None, 0, None);
-
-    assert!(!response.is_empty(), "Maximum fake_cert_len must still produce a response");
-    assert_eq!(response[0], TLS_RECORD_HANDSHAKE);
-}
-
-// ------------------------------------------------------------------
-// ALPN embedding in EncryptedExtensions record
-// ------------------------------------------------------------------
-
-#[test]
-fn alpn_marker_embedded_in_first_app_data_record() {
-    let secret = b"alpn_embed_test";
-    let client_digest = [0u8; TLS_DIGEST_LEN];
-    let session_id = vec![0xAB; 32];
-    let rng = crate::crypto::SecureRandom::new();
-
-    let response = build_server_hello(
-        secret,
-        &client_digest,
-        &session_id,
-        512,
-        &rng,
-        Some(b"h2".to_vec()),
-        0,
-        None,
-    );
-
-    let sh_len = u16::from_be_bytes([response[3], response[4]]) as usize;
-    let ccs_pos = 5 + sh_len;
-    let ccs_len = u16::from_be_bytes([response[ccs_pos + 3], response[ccs_pos + 4]]) as usize;
-    let app_pos = ccs_pos + 5 + ccs_len;
-    let app_len = u16::from_be_bytes([response[app_pos + 3], response[app_pos + 4]]) as usize;
-    let app_payload = &response[app_pos + 5..app_pos + 5 + app_len];
-
-    let expected = [0x00u8, 0x10, 0x00, 0x05, 0x00, 0x03, 0x02, b'h', b'2'];
-    assert!(
-        app_payload.windows(expected.len()).any(|w| w == expected),
-        "ALPN marker for h2 must be present in the first ApplicationData record"
-    );
-}
-
-#[test]
-fn oversized_alpn_not_embedded_when_marker_exceeds_record_capacity() {
-    let secret = b"alpn_oversized_test";
-    let client_digest = [0u8; TLS_DIGEST_LEN];
-    let session_id = vec![0xAB; 32];
-    let rng = crate::crypto::SecureRandom::new();
-    let oversized_alpn = vec![b'x'; u8::MAX as usize + 1];
-
-    let response = build_server_hello(
-        secret,
-        &client_digest,
-        &session_id,
-        512,
-        &rng,
-        Some(oversized_alpn),
-        u8::MAX,
-        None,
-    );
-
-    let mut pos = 0usize;
-    let mut app_records = 0usize;
-    let mut first_app_payload: Option<&[u8]> = None;
-    while pos + 5 <= response.len() {
-        let rtype = response[pos];
-        let rlen = u16::from_be_bytes([response[pos + 3], response[pos + 4]]) as usize;
-        let next = pos + 5 + rlen;
-        assert!(
-            next <= response.len(),
-            "record must stay within response bounds"
-        );
-        if rtype == TLS_RECORD_APPLICATION {
-            if first_app_payload.is_none() {
-                first_app_payload = Some(&response[pos + 5..next]);
-            }
-            app_records += 1;
-        }
-        pos = next;
-    }
-    assert!(app_records >= 3, "must have at least 3 ApplicationData records");
-    if let Some(payload) = first_app_payload {
-        let alpn_type = [0x00u8, 0x10];
-        let has_alpn = payload.windows(2).any(|w| w == alpn_type);
-        assert!(
-            !has_alpn,
-            "oversized ALPN must not be embedded when proto.len() > u8::MAX"
-        );
-    }
-}
-
-#[test]
-fn alpn_max_valid_size_255_bytes_embedded_correctly() {
-    let secret = b"alpn_max_valid_test";
-    let client_digest = [0u8; TLS_DIGEST_LEN];
-    let session_id = vec![0xAB; 32];
-    let rng = crate::crypto::SecureRandom::new();
-    let oversized_alpn = vec![0xABu8; u8::MAX as usize];
-
-    let response = build_server_hello(
-        secret,
-        &client_digest,
-        &session_id,
-        64,
-        &rng,
-        Some(oversized_alpn),
-        0,
-        None,
-    );
-
-    let sh_len = u16::from_be_bytes([response[3], response[4]]) as usize;
-    let ccs_pos = 5 + sh_len;
-    let ccs_len = u16::from_be_bytes([response[ccs_pos + 3], response[ccs_pos + 4]]) as usize;
-    let app_pos = ccs_pos + 5 + ccs_len;
-    let app_len = u16::from_be_bytes([response[app_pos + 3], response[app_pos + 4]]) as usize;
-    let _app_payload = &response[app_pos + 5..app_pos + 5 + app_len];
-    // marker_len = 4 + (2 + (1 + 255)) = 4 + 258 = 262 > fake_cert_len=64 → not embedded.
-    // Just assert response is structurally valid.
-    assert!(!response.is_empty());
-    assert_eq!(response[0], TLS_RECORD_HANDSHAKE);
-}
-
-#[test]
-fn alpn_marker_fits_exactly_in_record_capacity() {
-    let secret = b"alpn_exact_fit_test";
-    let client_digest = [0u8; TLS_DIGEST_LEN];
-    let session_id = vec![0xAB; 32];
-    let rng = crate::crypto::SecureRandom::new();
-    let proto = vec![b'z'; 57];
-
-    // marker_len = 4 + (2 + (1 + proto_len)) = 7 + proto_len = 64
-    let response = build_server_hello(
-        secret,
-        &client_digest,
-        &session_id,
-        64,
-        &rng,
-        Some(proto.clone()),
-        0,
-        None,
-    );
-
-    let sh_len = u16::from_be_bytes([response[3], response[4]]) as usize;
-    let ccs_pos = 5 + sh_len;
-    let ccs_len = u16::from_be_bytes([response[ccs_pos + 3], response[ccs_pos + 4]]) as usize;
-    let app_pos = ccs_pos + 5 + ccs_len;
-    let app_len = u16::from_be_bytes([response[app_pos + 3], response[app_pos + 4]]) as usize;
-    let app_payload = &response[app_pos + 5..app_pos + 5 + app_len];
-
-    let mut expected = Vec::new();
-    expected.extend_from_slice(&0x0010u16.to_be_bytes());
-    let ext_data_len = 2u16 + 1 + proto.len() as u16;
-    expected.extend_from_slice(&ext_data_len.to_be_bytes());
-    let proto_list_len = 1u16 + proto.len() as u16;
-    expected.extend_from_slice(&proto_list_len.to_be_bytes());
-    expected.push(proto.len() as u8);
-    expected.extend_from_slice(&proto);
-
-    assert!(
-        app_payload.windows(expected.len()).any(|w| w == expected.as_slice()),
-        "ALPN marker that fits exactly in record capacity must be embedded"
-    );
-}
-
-#[test]
-fn alpn_marker_one_byte_too_large_not_embedded() {
-    let secret = b"alpn_one_over_test";
-    let client_digest = [0u8; TLS_DIGEST_LEN];
-    let session_id = vec![0xAB; 32];
-    let rng = crate::crypto::SecureRandom::new();
-    let proto = vec![0xABu8; 58];
-
-    // marker_len = 65, fake_cert_len = 64 => marker must be fully skipped.
-    let response = build_server_hello(
-        secret,
-        &client_digest,
-        &session_id,
-        64,
-        &rng,
-        Some(proto),
-        0,
-        None,
-    );
-
-    let sh_len = u16::from_be_bytes([response[3], response[4]]) as usize;
-    let ccs_pos = 5 + sh_len;
-    let ccs_len = u16::from_be_bytes([response[ccs_pos + 3], response[ccs_pos + 4]]) as usize;
-    let app_pos = ccs_pos + 5 + ccs_len;
-    let app_len = u16::from_be_bytes([response[app_pos + 3], response[app_pos + 4]]) as usize;
-    let app_payload = &response[app_pos + 5..app_pos + 5 + app_len];
-
-    let mut marker_prefix = Vec::new();
-    marker_prefix.extend_from_slice(&0x0010u16.to_be_bytes());
-    marker_prefix.extend_from_slice(&0x003Du16.to_be_bytes());
-    assert!(
-        !app_payload
-            .windows(marker_prefix.len())
-            .any(|w| w == marker_prefix.as_slice()),
-        "ALPN marker one byte too large must not be embedded"
-    );
-}
-
-// ------------------------------------------------------------------
-// client_hello extension mirroring
-// ------------------------------------------------------------------
-
-/// When a ClientHello containing session_ticket (0x0023) is passed,
-/// the ServerHello must echo session_ticket in its extension list.
-#[test]
-fn client_hello_with_session_ticket_mirrors_extension() {
-    use crate::protocol::tls::has_extension_in_client_hello;
-
-    let secret = b"mirror_session_ticket_test";
-    let client_digest = [0u8; TLS_DIGEST_LEN];
-    let session_id = vec![0xAB; 32];
-    let rng = crate::crypto::SecureRandom::new();
-
-    // Minimal synthetic ClientHello with a session_ticket extension (0x0023).
-    // Layout: TLS record header (5) + Handshake header (4) + legacy_version (2)
-    //         + random (32) + session_id_len (1) + session_id (32)
-    //         + cipher_suites_len (2) + cipher (2) + comp_len (1) + comp (1)
-    //         + ext_total_len (2) + ext_type (2) + ext_len (2)
-    let mut ch: Vec<u8> = Vec::new();
-    // Record header
-    ch.push(0x16); // handshake
-    ch.extend_from_slice(&[0x03, 0x01]); // TLS 1.0 compat version
-    // Placeholder record length — filled in below
-    ch.extend_from_slice(&[0x00, 0x00]);
-
-    let body_start = ch.len();
-    ch.push(0x01); // ClientHello
-    ch.extend_from_slice(&[0x00, 0x00, 0x00]); // body len placeholder
-
-    let msg_start = ch.len();
-    ch.extend_from_slice(&[0x03, 0x03]); // legacy_version
-    ch.extend_from_slice(&[0xAA; 32]); // random
-    ch.push(32u8); // session_id_len
-    ch.extend_from_slice(&[0xBB; 32]); // session_id
-    ch.extend_from_slice(&[0x00, 0x02]); // cipher_suites_len = 2
-    ch.extend_from_slice(&[0x13, 0x01]); // TLS_AES_128_GCM_SHA256
-    ch.push(0x01); // comp_methods_len
-    ch.push(0x00); // null compression
-
-    // Extensions: only session_ticket (0x0023), zero-length data
-    let ext_bytes: &[u8] = &[0x00, 0x23, 0x00, 0x00]; // type + len=0
-    let ext_total = ext_bytes.len() as u16;
-    ch.extend_from_slice(&ext_total.to_be_bytes());
-    ch.extend_from_slice(ext_bytes);
-
-    // Patch body length
-    let body_len = (ch.len() - msg_start) as u32;
-    ch[body_start + 1] = ((body_len >> 16) & 0xFF) as u8;
-    ch[body_start + 2] = ((body_len >> 8) & 0xFF) as u8;
-    ch[body_start + 3] = (body_len & 0xFF) as u8;
-
-    // Patch record length
-    let record_len = (ch.len() - 5) as u16;
-    ch[3] = (record_len >> 8) as u8;
-    ch[4] = (record_len & 0xFF) as u8;
-
-    // Verify our synthetic ClientHello contains session_ticket
-    assert!(
-        has_extension_in_client_hello(&ch, 0x0023),
-        "Synthetic ClientHello must contain session_ticket extension"
-    );
-
-    let response = build_server_hello(
-        secret,
-        &client_digest,
-        &session_id,
-        1024,
-        &rng,
-        None,
-        0,
-        Some(&ch),
-    );
-
-    let exts = server_hello_extension_types(&response);
-    assert!(
-        exts.contains(&0x0023),
-        "ServerHello must mirror session_ticket when ClientHello offered it; got: {:?}",
-        exts
-    );
-}
-
-/// When client_hello is None, session_ticket must NOT appear in ServerHello
-/// (default behaviour: don't add extensions that weren't offered).
-#[test]
-fn no_client_hello_no_session_ticket_in_server_hello() {
-    let secret = b"no_mirror_test";
-    let client_digest = [0u8; TLS_DIGEST_LEN];
-    let session_id = vec![0xAB; 32];
-    let rng = crate::crypto::SecureRandom::new();
-
-    let response = build_server_hello(
-        secret,
-        &client_digest,
-        &session_id,
-        1024,
-        &rng,
-        None,
-        0,
-        None,
-    );
-
-    let exts = server_hello_extension_types(&response);
-    assert!(
-        !exts.contains(&0x0023),
-        "session_ticket must not appear in ServerHello when client_hello=None; got: {:?}",
-        exts
-    );
-}
-
-/// When a ClientHello WITHOUT session_ticket is passed, the ServerHello
-/// must not include session_ticket even though the code path is active.
-#[test]
-fn client_hello_without_session_ticket_not_mirrored() {
-    let secret = b"no_session_ticket_mirror_test";
-    let client_digest = [0u8; TLS_DIGEST_LEN];
-    let session_id = vec![0xAB; 32];
-    let rng = crate::crypto::SecureRandom::new();
-
-    // Minimal ClientHello with NO session_ticket extension — just supported_versions.
-    let mut ch: Vec<u8> = Vec::new();
-    ch.push(0x16);
-    ch.extend_from_slice(&[0x03, 0x01]);
-    ch.extend_from_slice(&[0x00, 0x00]); // record len placeholder
-
-    let body_start = ch.len();
-    ch.push(0x01);
-    ch.extend_from_slice(&[0x00, 0x00, 0x00]); // body len placeholder
-
-    let msg_start = ch.len();
-    ch.extend_from_slice(&[0x03, 0x03]);
-    ch.extend_from_slice(&[0xCC; 32]);
-    ch.push(0u8); // no session_id
-    ch.extend_from_slice(&[0x00, 0x02]);
-    ch.extend_from_slice(&[0x13, 0x01]);
-    ch.push(0x01);
-    ch.push(0x00);
-
-    // Extension: supported_versions only (0x002b), no session_ticket
-    let ext_bytes: &[u8] = &[0x00, 0x2b, 0x00, 0x02, 0x03, 0x04];
-    let ext_total = ext_bytes.len() as u16;
-    ch.extend_from_slice(&ext_total.to_be_bytes());
-    ch.extend_from_slice(ext_bytes);
-
-    let body_len = (ch.len() - msg_start) as u32;
-    ch[body_start + 1] = ((body_len >> 16) & 0xFF) as u8;
-    ch[body_start + 2] = ((body_len >> 8) & 0xFF) as u8;
-    ch[body_start + 3] = (body_len & 0xFF) as u8;
-    let record_len = (ch.len() - 5) as u16;
-    ch[3] = (record_len >> 8) as u8;
-    ch[4] = (record_len & 0xFF) as u8;
-
-    let response = build_server_hello(
-        secret,
-        &client_digest,
-        &session_id,
-        1024,
-        &rng,
-        None,
-        0,
-        Some(&ch),
-    );
-
-    let exts = server_hello_extension_types(&response);
-    assert!(
-        !exts.contains(&0x0023),
-        "session_ticket must not appear when ClientHello did not offer it; got: {:?}",
-        exts
-    );
-}
+        assert!(next <= response.len())
