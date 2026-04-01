@@ -802,6 +802,7 @@ where
             rng,
             selected_alpn.clone(),
             config.censorship.tls_new_session_tickets,
+            Some(handshake),
         )
     };
 
