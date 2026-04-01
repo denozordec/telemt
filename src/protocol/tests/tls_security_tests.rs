@@ -1375,4 +1375,17 @@ fn new_session_tickets_one_produces_four_app_records() {
         let rtype = response[pos];
         let rlen = u16::from_be_bytes([response[pos + 3], response[pos + 4]]) as usize;
         let next = pos + 5 + rlen;
-        assert!(next <= response.len())
+        assert!(
+            next <= response.len(),
+            "TLS record must stay inside response bounds"
+        );
+        if rtype == TLS_RECORD_APPLICATION {
+            app_records += 1;
+        }
+        pos = next;
+    }
+    assert_eq!(
+        app_records, 4,
+        "one ticket: exactly 4 ApplicationData records expected"
+    );
+}
