@@ -290,12 +290,7 @@ impl ServerHelloBuilder {
             return Vec::new();
         };
 
-        let body_len = 2 +
-                       32 +
-                       1 + self.session_id.len() +
-                       2 +
-                       1 +
-                       2 + extensions.len();
+        let body_len = 2 + 32 + 1 + self.session_id.len() + 2 + 1 + 2 + extensions.len();
         if body_len > 0x00ff_ffff {
             return Vec::new();
         }
