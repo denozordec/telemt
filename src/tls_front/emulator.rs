@@ -16,7 +16,9 @@ fn jitter_and_clamp_sizes(sizes: &[usize], rng: &SecureRandom) -> Vec<usize> {
         .iter()
         .map(|&size| {
             let base = size.clamp(MIN_APP_DATA, MAX_APP_DATA);
-            let jitter_range = ((base as f64) * 0.03).round() as i64;
+            // Tighten record size variance to better match captured HTTPS/TLS
+            // pacing while keeping a small amount of randomness.
+            let jitter_range = ((base as f64) * 0.01).round() as i64;
             if jitter_range == 0 {
                 return base;
             }
@@ -134,7 +136,7 @@ pub fn build_emulated_server_hello(
     let len_bytes = (body_len as u32).to_be_bytes();
     message.extend_from_slice(&len_bytes[1..4]);
     message.extend_from_slice(&cached.server_hello_template.version); // 0x0303
-    message.extend_from_slice(&[0u8; 32]); // random placeholder
+    message.extend_from_slice(&cached.server_hello_template.random);
     message.push(session_id.len() as u8);
     message.extend_from_slice(session_id);
     let cipher = if cached.server_hello_template.cipher_suite == [0, 0] {
