@@ -276,8 +276,15 @@ pub fn build_emulated_server_hello(
     let mut tickets = Vec::new();
     let ticket_count = new_session_tickets.min(4);
     if ticket_count > 0 {
-        for _ in 0..ticket_count {
-            let ticket_len: usize = rng.range(48) + 48;
+        let ticket_sizes = &cached.behavior_profile.ticket_record_sizes;
+        for i in 0..ticket_count {
+            let ticket_len: usize = if !ticket_sizes.is_empty() {
+                // Use captured record sizes to better match real-world TLS behavior.
+                // Fallback to legacy bounded randomness when profile has no ticket samples.
+                ticket_sizes[i as usize % ticket_sizes.len()]
+            } else {
+                rng.range(48) + 48
+            };
             let mut rec = Vec::with_capacity(5 + ticket_len);
             rec.push(TLS_RECORD_APPLICATION);
             rec.extend_from_slice(&TLS_VERSION);
@@ -320,7 +327,7 @@ mod tests {
     use super::build_emulated_server_hello;
     use crate::crypto::SecureRandom;
     use crate::protocol::constants::{
-        TLS_RECORD_APPLICATION, TLS_RECORD_CHANGE_CIPHER, TLS_RECORD_HANDSHAKE,
+        TLS_RECORD_APPLICATION, TLS_RECORD_CHANGE_CIPHER, TLS_RECORD_HANDSHAKE, TLS_VERSION,
     };
 
     fn first_app_data_payload(response: &[u8]) -> &[u8] {
@@ -464,5 +471,55 @@ mod tests {
 
         assert_eq!(response[app_start], TLS_RECORD_APPLICATION);
         assert_eq!(app_start + 5 + app_len, response.len());
+    }
+
+    fn application_record_lengths(response: &[u8]) -> Vec<usize> {
+        let hello_len = u16::from_be_bytes([response[3], response[4]]) as usize;
+        let ccs_start = 5 + hello_len;
+        let mut pos = ccs_start + 6; // ChangeCipherSpec record is 6 bytes in emulator.rs.
+
+        let mut out = Vec::new();
+        while pos + 5 <= response.len() {
+            if response[pos] != TLS_RECORD_APPLICATION
+                || response[pos + 1] != TLS_VERSION[0]
+                || response[pos + 2] != TLS_VERSION[1]
+            {
+                break;
+            }
+
+            let len = u16::from_be_bytes([response[pos + 3], response[pos + 4]]) as usize;
+            out.push(len);
+            pos += 5 + len;
+        }
+        out
+    }
+
+    #[test]
+    fn test_build_emulated_server_hello_uses_ticket_record_sizes() {
+        let mut cached = make_cached(None);
+        cached.behavior_profile.ticket_record_sizes = vec![60, 80];
+        cached.app_data_records_sizes = vec![64];
+        cached.total_app_data_len = 64;
+
+        let rng = SecureRandom::new();
+        let response = build_emulated_server_hello(
+            b"secret",
+            &[0x11; 32],
+            &[0x22; 16],
+            &cached,
+            false,
+            &rng,
+            None,
+            2,
+        );
+
+        let app_lens = application_record_lengths(&response);
+        assert!(
+            app_lens.len() >= 2,
+            "expected at least 2 TLS ApplicationData records"
+        );
+        let ticket_count = 2usize;
+        let got_tickets = &app_lens[app_lens.len() - ticket_count..];
+        assert_eq!(got_tickets, &[60usize, 80usize]);
     }
 }
