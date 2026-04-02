@@ -305,6 +305,10 @@ pub fn build_emulated_server_hello(
     response.extend_from_slice(&tickets);
 
     // --- HMAC ---
+    // The client validates the FakeTLS HMAC by zeroing the digest bytes region
+    // at `TLS_DIGEST_POS` before recomputing. Ensure we do the same here, so
+    // changing ServerHello random doesn't break handshake acceptance.
+    response[TLS_DIGEST_POS..TLS_DIGEST_POS + TLS_DIGEST_LEN].fill(0);
     let mut hmac_input = Vec::with_capacity(TLS_DIGEST_LEN + response.len());
     hmac_input.extend_from_slice(client_digest);
     hmac_input.extend_from_slice(&response);
