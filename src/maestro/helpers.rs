@@ -359,8 +359,36 @@ pub(crate) async fn wait_until_admission_open(admission_rx: &mut watch::Receiver
     }
 }
 
+/// Classify errors that occur when a connection is torn down before any MTProto
+/// data arrives as INFO-level rather than WARN-level.
+///
+/// Two patterns are covered:
+///
+/// 1. `expected 64 bytes, got 0` — the canonical MTProto handshake EOF:
+///    the client (or a DPI probe running server-speaks-first detection)
+///    opened the TCP connection and closed it immediately without sending
+///    any data. This is normal for port scanners, health checks, and RKN
+///    active probes that open TCP, wait briefly for a server banner, and
+///    RST when none arrives. Logging these as WARN fills the log with
+///    noise that masks real errors.
+///
+/// 2. `expected 64 bytes, got N` (N < 64 and N > 0) — a partial handshake
+///    where the peer sent some bytes then closed the connection mid-read.
+///    This typically happens when a DPI interception box injects a RST
+///    after seeing enough of the ClientHello to fingerprint the traffic.
+///    Classifying these as INFO reduces log spam during active censorship
+///    periods when hundreds of such probes arrive per minute.
 pub(crate) fn is_expected_handshake_eof(err: &crate::error::ProxyError) -> bool {
-    err.to_string().contains("expected 64 bytes, got 0")
+    let s = err.to_string();
+    // Pattern 1: clean EOF before any data (port scanners, server-speaks-first probes)
+    if s.contains("expected 64 bytes, got 0") {
+        return true;
+    }
+    // Pattern 2: partial read — DPI RST injection mid-handshake
+    if s.contains("expected 64 bytes, got ") {
+        return true;
+    }
+    false
 }
 
 pub(crate) async fn load_startup_proxy_config_snapshot(
