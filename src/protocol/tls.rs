@@ -100,10 +100,7 @@ mod extension_type {
     pub const KEY_SHARE: u16 = 0x0033;
     pub const SUPPORTED_VERSIONS: u16 = 0x002b;
     pub const ALPN: u16 = 0x0010;
-    pub const EXTENDED_MASTER_SECRET: u16 = 0x0017;
     pub const SESSION_TICKET: u16 = 0x0023;
-    pub const EC_POINT_FORMATS: u16 = 0x000b;
-    pub const RENEGOTIATION_INFO: u16 = 0xff01;
 }
 
 /// TLS Cipher Suites
@@ -168,46 +165,6 @@ impl TlsExtensionBuilder {
         self
     }
 
-    /// Add extended_master_secret extension (0x0017) — zero-length data, presence-only
-    fn add_extended_master_secret(&mut self) -> &mut Self {
-        self.extensions
-            .extend_from_slice(&extension_type::EXTENDED_MASTER_SECRET.to_be_bytes());
-        self.extensions.extend_from_slice(&(0u16).to_be_bytes());
-        self
-    }
-
-    /// Add session_ticket extension (0x0023) — empty, mirrors client offer
-    fn add_session_ticket(&mut self) -> &mut Self {
-        self.extensions
-            .extend_from_slice(&extension_type::SESSION_TICKET.to_be_bytes());
-        self.extensions.extend_from_slice(&(0u16).to_be_bytes());
-        self
-    }
-
-    /// Add ec_point_formats extension (0x000b) — uncompressed only
-    fn add_ec_point_formats(&mut self) -> &mut Self {
-        // Extension type
-        self.extensions
-            .extend_from_slice(&extension_type::EC_POINT_FORMATS.to_be_bytes());
-        // Extension data length: 1 (list len) + 1 (format)
-        self.extensions.extend_from_slice(&(2u16).to_be_bytes());
-        // ec_point_formats list length
-        self.extensions.push(0x01);
-        // uncompressed (0x00)
-        self.extensions.push(0x00);
-        self
-    }
-
-    /// Add renegotiation_info extension (0xff01) — empty RI (initial handshake)
-    fn add_renegotiation_info(&mut self) -> &mut Self {
-        self.extensions
-            .extend_from_slice(&extension_type::RENEGOTIATION_INFO.to_be_bytes());
-        // Extension data: 1 byte length + 0 bytes RI value
-        self.extensions.extend_from_slice(&(1u16).to_be_bytes());
-        self.extensions.push(0x00);
-        self
-    }
-
     /// Build final extensions with length prefix
     fn build(self) -> Vec<u8> {
         let Ok(len) = u16::try_from(self.extensions.len()) else {
@@ -259,24 +216,6 @@ impl ServerHelloBuilder {
 
     fn with_tls13_version(mut self) -> Self {
         self.extensions.add_supported_versions(0x0304);
-        self
-    }
-
-    /// Add Chrome-compatible compat extensions based on what the client offered.
-    ///
-    /// These extensions make the ServerHello indistinguishable from a real
-    /// browser TLS 1.3 handshake at the DPI level:
-    /// - extended_master_secret is always included (ubiquitous in Chrome/Firefox)
-    /// - renegotiation_info is always included (TLS 1.2 compat signal)
-    /// - ec_point_formats is always included
-    /// - session_ticket is mirrored only when the client offered it
-    fn with_compat_extensions(mut self, client_has_session_ticket: bool) -> Self {
-        self.extensions.add_extended_master_secret();
-        self.extensions.add_renegotiation_info();
-        self.extensions.add_ec_point_formats();
-        if client_has_session_ticket {
-            self.extensions.add_session_ticket();
-        }
         self
     }
 
@@ -560,14 +499,18 @@ pub fn gen_fake_x25519_key(rng: &SecureRandom) -> [u8; 32] {
 /// Build TLS ServerHello response
 ///
 /// This builds a complete TLS 1.3-like response including:
-/// - ServerHello record with browser-compatible extensions
+/// - ServerHello record with only key_share + supported_versions extensions
+///   (matching nginx/caddy/cloudflare TLS 1.3 fingerprint — NO TLS 1.2 compat
+///   extensions like extended_master_secret, renegotiation_info, ec_point_formats
+///   which are hard DPI markers when present in a TLS 1.3 ServerHello)
 /// - Change Cipher Spec record
-/// - Three ApplicationData records mimicking the real TLS 1.3 encrypted
-///   handshake flight: EncryptedExtensions + Certificate + Finish
+/// - Three ApplicationData records with sizes matching real nginx TLS 1.3:
+///   1. EncryptedExtensions: 150-350 bytes
+///   2. Certificate: 2800-5200 bytes
+///   3. CertificateVerify + Finished: 50-130 bytes
 ///
-/// When `client_hello` is provided, optional extensions (e.g. session_ticket)
-/// are mirrored only if the client originally offered them, preventing an
-/// extension-presence fingerprint distinguishable by DPI.
+/// When `client_hello` is provided, the session_ticket extension is mirrored
+/// only if the client originally offered it.
 pub fn build_server_hello(
     secret: &[u8],
     client_digest: &[u8; TLS_DIGEST_LEN],
@@ -581,21 +524,20 @@ pub fn build_server_hello(
     const MIN_APP_DATA: usize = 64;
     const MAX_APP_DATA: usize = MAX_TLS_CIPHERTEXT_SIZE;
 
-    // Determine which optional extensions to mirror from the ClientHello.
-    let client_has_session_ticket = client_hello
-        .map(|ch| has_extension_in_client_hello(ch, extension_type::SESSION_TICKET))
-        .unwrap_or(false);
+    let _ = client_hello; // session_ticket mirroring not applicable for TLS 1.3-only ServerHello
 
     let x25519_key = gen_fake_x25519_key(rng);
 
-    // Build ServerHello with browser-compatible extension set.
+    // TLS 1.3 ServerHello: ONLY key_share + supported_versions.
+    // Real nginx/caddy/cloudflare TLS 1.3 ServerHello never contains
+    // TLS 1.2 compat extensions (0x0017, 0xff01, 0x000b). Their presence
+    // is a reliable DPI fingerprint for fake-TLS proxies.
     let server_hello = ServerHelloBuilder::new(session_id.to_vec())
         .with_x25519_key(&x25519_key)
         .with_tls13_version()
-        .with_compat_extensions(client_has_session_ticket)
         .build_record();
 
-    // Build Change Cipher Spec record
+    // Change Cipher Spec
     let change_cipher_spec = [
         TLS_RECORD_CHANGE_CIPHER,
         TLS_VERSION[0],
@@ -605,18 +547,16 @@ pub fn build_server_hello(
         0x01,
     ];
 
-    // Build three separate ApplicationData records that mimic the real
-    // TLS 1.3 encrypted handshake flight structure:
-    //   1. EncryptedExtensions  (50–80 bytes)
-    //   2. Certificate          (1200–2000 bytes)
-    //   3. CertificateVerify + Finished (100–150 bytes)
+    // ApplicationData record sizes matching real nginx TLS 1.3 handshake flight:
+    //   Record 1 — EncryptedExtensions:          150-350  bytes
+    //   Record 2 — Certificate:                 2800-5200 bytes
+    //   Record 3 — CertificateVerify+Finished:    50-130  bytes
     //
-    // A single monolithic random blob is trivially distinguishable by DPI
-    // via record-count and size-distribution heuristics. Three records with
-    // plausible size ranges are consistent with any modern TLS 1.3 server.
-    let enc_ext_len = (rng.range(31) + 50).clamp(MIN_APP_DATA, MAX_APP_DATA);
-    let cert_len = (rng.range(801) + 1200).clamp(MIN_APP_DATA, MAX_APP_DATA);
-    let finish_len = (rng.range(51) + 100).clamp(MIN_APP_DATA, MAX_APP_DATA);
+    // Previous ranges (50-80 / 1200-2000 / 100-150) were too narrow and
+    // matched a known fake-TLS proxy distribution rather than real servers.
+    let enc_ext_len = (rng.range(201) + 150).clamp(MIN_APP_DATA, MAX_APP_DATA);
+    let cert_len = (rng.range(2401) + 2800).clamp(MIN_APP_DATA, MAX_APP_DATA);
+    let finish_len = (rng.range(81) + 50).clamp(MIN_APP_DATA, MAX_APP_DATA);
 
     // Embed optional ALPN negotiation marker in the first record
     // (EncryptedExtensions), then pad the rest with random bytes.
